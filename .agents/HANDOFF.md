@@ -12,8 +12,12 @@ Updated 2026-09-18, America/Chicago.
 - The default local settings filename is `settings.toml`; copy from
   `settings.toml.template`. The template links to the library README for
   connection details. Local settings and timestamped `results/*.csv` are ignored.
-- Each voltage command is preceded by a flushed `set_voltage` CSV row.
-  Successful samples become flushed `observation` rows with all status fields.
+- Before control, the app saves the original voltage setpoint and ramp interval
+  in a `restore_pending` TOML file. The first voltage command also requests the
+  device's minimum supported 1000 ms ramp interval. On cleanup it restores both
+  settings; matching readback renames the file to `restore_confirmed`.
+- Each settings command is preceded by a flushed action CSV row. Successful
+  samples become flushed `observation` rows with all status fields.
 - CSV headers preserve unit-symbol case, such as `output_voltage_V` and
   `output_current_nA`. The plotting notebook also accepts older lowercase headers.
 - Stdout prints the CSV path and one line per voltage-control action. Sampling

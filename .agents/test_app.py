@@ -1,6 +1,7 @@
 """Agent-owned offline checks for logging and scheduling without device I/O."""
 
 import csv
+import tomllib
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from typing import get_type_hints
@@ -39,6 +40,7 @@ def sample_at(seconds):
     values.update(
         observed_at=datetime(2026, 9, 18, tzinfo=UTC) + timedelta(seconds=seconds),
         output_voltage_setpoint_v=2900,
+        output_voltage_ramp_interval_ms=10000,
         output_voltage_v=2898,
         output_current_na=43,
         global_alarm=True,  # An observation, not an automatic stop condition.
@@ -105,7 +107,7 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
 
     def check_action_is_already_on_disk():
         rows = read_rows(next(tmp_path.glob("*.csv")))
-        assert rows[-1]["event"] == "set_voltage"
+        assert rows[-1]["event"] in {"set_voltage", "restore_settings"}
         assert rows[-1]["output_current_nA"] == ""
 
     def check_previous_observations_are_already_on_disk():
@@ -122,46 +124,72 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
 
     rows = read_rows(path)
     assert [row["event"] for row in rows] == [
-        "set_voltage",
-        "observation",
-        "observation",
         "observation",
         "set_voltage",
         "observation",
         "observation",
+        "observation",
+        "set_voltage",
+        "observation",
+        "observation",
+        "observation",
+        "restore_settings",
         "observation",
     ]
-    assert visible_observations == list(range(6))
-    assert [call[1] for call in device.calls if call[0] == "set"] == [0, 2.5]
+    assert visible_observations == list(range(8))
+    assert [call[1] for call in device.calls if call[0] == "set"] == [0, 2.5, 5]
     assert [call[2] for call in device.calls if call[0] == "set"] == [
-        {"output_voltage_setpoint_v": 3000},
+        {
+            "output_voltage_setpoint_v": 3000,
+            "output_voltage_ramp_interval_ms": 1000,
+        },
         {"output_voltage_setpoint_v": 3200},
+        {
+            "output_voltage_setpoint_v": 2900,
+            "output_voltage_ramp_interval_ms": 10000,
+        },
     ]
     assert [call[1] for call in device.calls if call[0] == "read"] == [
+        0,
         0,
         1,
         2,
         2.5,
         3.5,
         4.5,
+        6,
     ]
-    assert device.calls[-1] == ("close", 5)
-    assert clock.now == 5  # The final hold completes too.
-    assert rows[4]["requested_voltage_V"] == "3200"
-    assert rows[1]["requested_voltage_V"] == ""
-    assert rows[1]["output_voltage_setpoint_V"] == "2900"  # Not the requested 3000.
-    assert rows[1]["output_voltage_V"] == "2898"
-    assert rows[1]["enabled"] == "False"
-    assert rows[1]["global_alarm"] == "True"
-    assert rows[1]["arcing_events"] == "0"
-    assert rows[1]["pressure_Torr"] == ""
-    assert rows[1]["timestamp"] == "2026-09-18T00:00:00.000000Z"
+    assert device.calls[-1] == ("close", 6)
+    assert clock.now == 6  # Includes one second before restoration readback.
+    assert rows[5]["requested_voltage_V"] == "3200"
+    assert rows[9]["requested_voltage_V"] == "2900"
+    assert rows[1]["requested_ramp_interval_ms"] == "1000"
+    assert rows[9]["requested_ramp_interval_ms"] == "10000"
+    assert rows[0]["requested_voltage_V"] == ""
+    assert rows[0]["output_voltage_setpoint_V"] == "2900"  # Original setpoint.
+    assert rows[0]["output_voltage_V"] == "2898"
+    assert rows[0]["enabled"] == "False"
+    assert rows[0]["global_alarm"] == "True"
+    assert rows[0]["arcing_events"] == "0"
+    assert rows[0]["pressure_Torr"] == ""
+    assert rows[0]["timestamp"] == "2026-09-18T00:00:00.000000Z"
     assert all(row["timestamp"].endswith("Z") for row in rows)
     assert "observed_at" not in rows[0]
+    restored_files = list(tmp_path.glob("*.settings.restore_confirmed.toml"))
+    assert len(restored_files) == 1
+    with restored_files[0].open("rb") as stream:
+        saved = tomllib.load(stream)
+    assert saved["original_settings"] == {
+        "output_voltage_setpoint_v": 2900,
+        "output_voltage_ramp_interval_ms": 10000,
+    }
+    assert not list(tmp_path.glob("*.settings.restore_pending.toml"))
     stdout = capsys.readouterr().out
     assert stdout.count(" set_voltage: ") == 2
-    assert "target 3000 V (first step); current unavailable" in stdout
+    assert stdout.count(" restore_settings: ") == 1
+    assert "2900 -> 3000 V (+100 V); ramp interval 10000 -> 1000 ms" in stdout
     assert "3000 -> 3200 V (+200 V); last current 43 nA" in stdout
+    assert "3200 -> 2900 V (-300 V); ramp interval 1000 -> 10000 ms" in stdout
 
 
 def test_hold_starts_after_write_and_short_hold_has_one_sample(rig, tmp_path):
@@ -172,9 +200,9 @@ def test_hold_starts_after_write_and_short_hold_has_one_sample(rig, tmp_path):
         app.Measurement(3000, 200, 3000, 0.5),
         tmp_path,
     )
-    assert [call[1] for call in device.calls if call[0] == "read"] == [2]
-    assert clock.now == 2.5
-    assert len(read_rows(path)) == 2
+    assert [call[1] for call in device.calls if call[0] == "read"] == [0, 2, 5.5]
+    assert clock.now == 5.5
+    assert len(read_rows(path)) == 5
 
 
 def test_slow_reads_skip_missed_ticks_without_catchup_bursts(rig, tmp_path):
@@ -185,15 +213,20 @@ def test_slow_reads_skip_missed_ticks_without_catchup_bursts(rig, tmp_path):
         app.Measurement(3000, 200, 3000, 3),
         tmp_path,
     )
-    assert [call[1] for call in device.calls if call[0] == "read"] == [0, 2]
-    assert device.calls[-1] == ("close", 3.4)
+    assert [call[1] for call in device.calls if call[0] == "read"] == [
+        0,
+        1.4,
+        3.4,
+        5.8,
+    ]
+    assert device.calls[-1] == ("close", 7.2)
 
 
 @pytest.mark.parametrize(
     "failure", [SAESSIPPowerCommunicationError("timeout"), KeyboardInterrupt()]
 )
 @pytest.mark.parametrize("operation", ["read", "write"])
-def test_failure_keeps_intent_and_closes_without_retry(
+def test_failure_restores_after_a_voltage_request_and_closes(
     rig, tmp_path, operation, failure
 ):
     _, device, _ = rig
@@ -205,10 +238,21 @@ def test_failure_keeps_intent_and_closes_without_retry(
             tmp_path,
         )
     rows = read_rows(next(tmp_path.glob("*.csv")))
-    assert len(rows) == 1
-    assert rows[0]["event"] == "set_voltage"
-    assert rows[0]["requested_voltage_V"] == "3000"
-    assert [call[0] for call in device.calls].count("set") == 1
+    if operation == "read":
+        assert rows == []
+        assert [call[0] for call in device.calls].count("set") == 0
+    else:
+        assert [row["event"] for row in rows] == [
+            "observation",
+            "set_voltage",
+            "restore_settings",
+        ]
+        assert rows[1]["requested_voltage_V"] == "3000"
+        assert rows[1]["requested_ramp_interval_ms"] == "1000"
+        assert rows[2]["requested_voltage_V"] == "2900"
+        assert rows[2]["requested_ramp_interval_ms"] == "10000"
+        assert [call[0] for call in device.calls].count("set") == 2
+        assert list(tmp_path.glob("*.settings.restore_pending.toml"))
     assert device.calls[-1][0] == "close"
 
 
@@ -223,7 +267,7 @@ def test_csv_failure_prevents_the_voltage_command(rig, tmp_path, monkeypatch):
             app.Measurement(3000, 200, 3400, 2),
             tmp_path,
         )
-    assert [call[0] for call in device.calls] == ["connect", "close"]
+    assert [call[0] for call in device.calls] == ["connect", "read", "close"]
 
 
 def test_voltage_grid():

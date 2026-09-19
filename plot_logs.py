@@ -50,7 +50,7 @@ log = log.rename(
 )
 log["timestamp"] = pd.to_datetime(log["timestamp"], utc=True)
 observations = log.loc[log["event"] == "observation"].copy()
-actions = log.loc[log["event"] == "set_voltage"].copy()
+actions = log.loc[log["event"].isin(["set_voltage", "restore_settings"])].copy()
 print(f"{selected_path}: {len(observations)} observations, {len(actions)} actions")
 display(observations.tail())
 

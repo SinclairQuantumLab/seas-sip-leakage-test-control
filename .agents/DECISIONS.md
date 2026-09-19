@@ -2,7 +2,8 @@
 
 - 2026-09-18: Do not print individual samples to stdout. Print one concise line
   per voltage-control action with its UTC timestamp, voltage change and target,
-  last observed current, and hold time. The first step reports unavailable current.
+  last observed current, and hold time. Read the initial status so the first
+  step also has a current observation.
 
 - 2026-09-18: Accept a positional settings path or `--settings`; keep `--config`
   as an alias and default to `settings.toml` when omitted. CSV unit symbols must
@@ -21,9 +22,13 @@
   sampling interval. A negative step supports descending sequences; equal start
   and stop gives one hold. Stop is included if on the step grid, otherwise the
   sequence ends before crossing it.
-- Runtime issues voltage setpoint changes only. HV start/stop remains manual.
-  The last setpoint remains after normal completion, interruption, or an error.
-  Device interlocks and keepalive follow the device's existing configuration.
+- Runtime changes the voltage setpoint and requests a 1000 ms ramp interval on
+  the first step. The manual specifies 1–60 seconds, so zero is not supported.
+  HV start/stop remains manual. Before control, save only the original voltage
+  setpoint and ramp interval in a `restore_pending` TOML file. Restore both once
+  on normal completion, interruption, or error after a settings request and log
+  `restore_settings`. Rename the backup to `restore_confirmed` only after a
+  matching readback. Do not wait for the physical voltage ramp to finish.
 - CLI + TOML + CSV are the user interface. Default file: `settings.toml`;
   template: `settings.toml.template`. Connection comments link to
   <https://github.com/SinclairQuantumLab/py-seas-sip-power#connections-and-access>.

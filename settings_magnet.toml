@@ -12,5 +12,5 @@ transport = "udp" # udp, modbus_tcp, or modbus_rtu
 start_voltage_v = 3000
 step_voltage_v = 200
 stop_voltage_v = 5000
-hold_time_s = 60
+hold_time_s = 5
 sample_interval_s = 1

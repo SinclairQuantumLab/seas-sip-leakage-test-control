@@ -55,3 +55,19 @@
 - Added one stdout line per voltage-control action; samples remain CSV-only.
 - Ran the single affected test (1 passed) and Ruff on the changed Python files.
   No device I/O or broader test run was performed.
+
+## Ramp and settings restoration, 2026-09-18
+
+- Confirmed in the vendor manual that `Vout Ramp Intv` is limited to 1–60
+  seconds. The app therefore requests the supported minimum of 1000 ms on the
+  first voltage step; the library's lower bound was not changed.
+- Added a pending TOML backup containing only the original voltage setpoint and
+  ramp interval. Cleanup reapplies both once, logs the intent, records a
+  readback, and renames the backup to `restore_confirmed` only when both values
+  match.
+- Ran the two directly affected offline test groups: 5 passed, 16 deselected.
+  Ruff passed for `main.py`, `.agents/test_app.py`, and `plot_logs.py`. No live
+  device I/O was performed.
+- Updated the local notebook without execution. The changed loading cell's old
+  outputs were cleared by Jupytext; the matching plot-cell output and notebook
+  input were preserved.

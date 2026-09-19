@@ -90,6 +90,7 @@ CSV_FIELDS = [
     "timestamp",
     "event",
     "requested_voltage_V",
+    "requested_ramp_interval_ms",
     *(csv_column(name) for name in PRIMARY_FIELDS),
     *(
         csv_column(field.name)
@@ -97,6 +98,44 @@ CSV_FIELDS = [
         if field.name not in {"observed_at", *PRIMARY_FIELDS}
     ),
 ]
+CHANGED_SETTING_FIELDS = (
+    "output_voltage_setpoint_v",
+    "output_voltage_ramp_interval_ms",
+)
+MEASUREMENT_RAMP_INTERVAL_MS = 1000
+
+
+def capture_original_settings(status: DeviceStatus) -> dict[str, int]:
+    """Copy the original values of the two settings changed by this app."""
+    return {name: getattr(status, name) for name in CHANGED_SETTING_FIELDS}
+
+
+def write_settings_snapshot(
+    path: Path,
+    status: DeviceStatus,
+    settings: dict[str, int],
+    csv_name: str,
+) -> None:
+    """Persist original values before either setting is changed."""
+    lines = [
+        "# Original device settings captured before the measurement procedure.",
+        "# These are the previous values of settings temporarily changed by this app.",
+        "# The app reapplies these values when the procedure ends.",
+        "# A restore_pending filename means readback has not confirmed restoration.",
+        "# A restore_confirmed filename means readback matched these values.",
+        "[snapshot]",
+        f'captured_at = "{utc_timestamp(status.observed_at)}"',
+        f'csv_file = "{csv_name}"',
+        "",
+        "[original_settings]",
+    ]
+    lines.extend(f"{name} = {settings[name]}" for name in CHANGED_SETTING_FIELDS)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def settings_match(status: DeviceStatus, settings: dict[str, int]) -> bool:
+    """Return whether readback matches both settings saved for restoration."""
+    return all(getattr(status, name) == value for name, value in settings.items())
 
 
 class CsvLog:
@@ -108,18 +147,43 @@ class CsvLog:
         self.writer.writeheader()
         self.stream.flush()
 
-    def set_voltage(self, voltage_v: int) -> str:
+    def settings_action(
+        self,
+        event: str,
+        *,
+        voltage_v: int | None = None,
+        ramp_interval_ms: int | None = None,
+    ) -> str:
         """Record intent before calling the device; this is not an ACK."""
         timestamp = utc_timestamp(datetime.now(UTC))
         self.writer.writerow(
             {
                 "timestamp": timestamp,
-                "event": "set_voltage",
+                "event": event,
                 "requested_voltage_V": voltage_v,
+                "requested_ramp_interval_ms": ramp_interval_ms,
             }
         )
         self.stream.flush()
         return timestamp
+
+    def set_voltage(
+        self, voltage_v: int, ramp_interval_ms: int | None = None
+    ) -> str:
+        """Record a measurement-step voltage request."""
+        return self.settings_action(
+            "set_voltage",
+            voltage_v=voltage_v,
+            ramp_interval_ms=ramp_interval_ms,
+        )
+
+    def restore_settings(self, voltage_v: int, ramp_interval_ms: int) -> str:
+        """Record restoration of the two original settings."""
+        return self.settings_action(
+            "restore_settings",
+            voltage_v=voltage_v,
+            ramp_interval_ms=ramp_interval_ms,
+        )
 
     def observation(self, status: DeviceStatus) -> None:
         """Keep observed values, including unknowns, separate from targets."""
@@ -137,31 +201,54 @@ def run_measurement(
 ) -> Path:
     """Set each voltage once and log samples for the configured hold time."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{datetime.now(UTC):%Y%m%d_%H%M%S_%fZ}.csv"
+    stem = f"{datetime.now(UTC):%Y%m%d_%H%M%S_%fZ}"
+    path = output_dir / f"{stem}.csv"
+    pending_settings_path = output_dir / f"{stem}.settings.restore_pending.toml"
+    restored_settings_path = output_dir / f"{stem}.settings.restore_confirmed.toml"
     device = SAESSIPPower(connection, access_mode=AccessModeEnum.READ_WRITE)
 
     with path.open("x", encoding="utf-8", newline="") as stream:
         log = CsvLog(stream)
         print(f"CSV: {path.resolve()}", flush=True)
+        original_settings = None
+        last_requested_voltage = None
+        last_status = None
+        settings_were_requested = False
         try:
             device.connect()
-            previous_voltage = None
-            last_status = None
-            for voltage in measurement.voltages():
-                timestamp = log.set_voltage(voltage)
-                device.set_working_parameters(output_voltage_setpoint_v=voltage)
-                if previous_voltage is None:
-                    change = f"target {voltage} V (first step)"
-                else:
-                    delta = voltage - previous_voltage
-                    change = f"{previous_voltage} -> {voltage} V ({delta:+d} V)"
-                current = (
-                    "current unavailable"
-                    if last_status is None
-                    else f"last current {last_status.output_current_na} nA"
+            last_status = device.read_sample()
+            original_settings = capture_original_settings(last_status)
+            write_settings_snapshot(
+                pending_settings_path, last_status, original_settings, path.name
+            )
+            print(f"Settings backup: {pending_settings_path.resolve()}", flush=True)
+            log.observation(last_status)
+            previous_voltage = last_status.output_voltage_setpoint_v
+            original_ramp = last_status.output_voltage_ramp_interval_ms
+
+            for step_index, voltage in enumerate(measurement.voltages()):
+                ramp_interval = (
+                    MEASUREMENT_RAMP_INTERVAL_MS if step_index == 0 else None
+                )
+                timestamp = log.set_voltage(voltage, ramp_interval)
+                last_requested_voltage = voltage
+                settings_were_requested = True
+                requested_settings = {"output_voltage_setpoint_v": voltage}
+                if ramp_interval is not None:
+                    requested_settings["output_voltage_ramp_interval_ms"] = (
+                        ramp_interval
+                    )
+                device.set_working_parameters(**requested_settings)
+                delta = voltage - previous_voltage
+                change = f"{previous_voltage} -> {voltage} V ({delta:+d} V)"
+                current = f"last current {last_status.output_current_na} nA"
+                ramp_change = (
+                    f"; ramp interval {original_ramp} -> {ramp_interval} ms"
+                    if ramp_interval is not None
+                    else ""
                 )
                 print(
-                    f"{timestamp} set_voltage: {change}; {current}; "
+                    f"{timestamp} set_voltage: {change}{ramp_change}; {current}; "
                     f"hold {measurement.hold_time_s:g} s",
                     flush=True,
                 )
@@ -187,7 +274,41 @@ def run_measurement(
                         )
                         next_sample += missed * measurement.sample_interval_s
         finally:
-            device.close()
+            try:
+                if original_settings is not None and settings_were_requested:
+                    original_voltage = original_settings["output_voltage_setpoint_v"]
+                    original_ramp = original_settings[
+                        "output_voltage_ramp_interval_ms"
+                    ]
+                    timestamp = log.restore_settings(
+                        original_voltage, original_ramp
+                    )
+                    device.set_working_parameters(**original_settings)
+                    time.sleep(1.0)
+                    restored_status = device.read_sample()
+                    log.observation(restored_status)
+                    if not settings_match(restored_status, original_settings):
+                        raise RuntimeError(
+                            "restored settings did not match the saved "
+                            f"settings; use {pending_settings_path} for recovery"
+                        )
+                    pending_settings_path.rename(restored_settings_path)
+                    delta = original_voltage - last_requested_voltage
+                    print(
+                        f"{timestamp} restore_settings: {last_requested_voltage} "
+                        f"-> {original_voltage} V ({delta:+d} V); "
+                        f"ramp interval {MEASUREMENT_RAMP_INTERVAL_MS} -> "
+                        f"{original_ramp} ms; "
+                        f"last current {last_status.output_current_na} nA",
+                        flush=True,
+                    )
+                    print(
+                        f"Settings restore confirmed: "
+                        f"{restored_settings_path.resolve()}",
+                        flush=True,
+                    )
+            finally:
+                device.close()
     return path
 
 
@@ -220,7 +341,14 @@ def main() -> None:
         path = run_measurement(connection, measurement)
     except KeyboardInterrupt:
         parser.exit(130, "Interrupted. Rows already written remain in the CSV.\n")
-    except (OSError, ValueError, TypeError, KeyError, SAESSIPPowerError) as exc:
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        SAESSIPPowerError,
+    ) as exc:
         parser.exit(1, f"Error: {exc}\n")
     print(f"Completed: {path}")
 

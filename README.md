@@ -6,9 +6,11 @@ hold each voltage for a fixed time, and record device status in one CSV file.
 ## Usage
 
 Use Python 3.14 and uv. `py-seas-sip-power/` is the local library checkout in
-this workspace.
+this workspace, so clone the repository with its submodule:
 
 ```powershell
+git clone --recursive <repository-url>
+Set-Location seas-sip-leakage-test-control
 uv sync
 Copy-Item settings.toml.template settings.toml
 ```
@@ -30,9 +32,10 @@ uv run main.py --settings "settings_no magnet.toml"
 
 The CSV is created under `results/` in the current working directory, named
 with the UTC start time, for example `results/20260918_193000_123456Z.csv`.
-The file path and each voltage-control action are printed to the terminal.
-Individual samples are written only to CSV. A control line includes the UTC
-timestamp, voltage change, new target, last observed current, and hold time:
+The file path and each voltage-control or restoration action are printed to the
+terminal. Individual samples are written only to CSV. A control line includes
+the UTC timestamp, voltage change, new target, last observed current, and hold
+time:
 
 ```text
 2026-09-18T19:35:00.000000Z set_voltage: 3000 -> 3200 V (+200 V); last current 43 nA; hold 300 s
@@ -60,12 +63,22 @@ sample_interval_s = 1
   start 3000, step 500, stop 4200 produces 3000, 3500, 4000 V.
 - `hold_time_s` starts when the voltage-setting call returns. The first sample
   is read immediately, without waiting for voltage or current to settle.
+- The first voltage request also sets `output_voltage_ramp_interval_ms` to
+  1000 ms, the fastest value allowed by the device manual. The permitted range
+  is 1–60 seconds, so a zero ramp interval is not supported.
 - Sampling uses a monotonic clock. Slow communication skips missed sampling
   ticks; an in-progress communication call can also delay the end of a hold.
 - The app changes the voltage setpoint. The user starts and stops HV operation.
-  On completion, Ctrl+C, or an error, the app closes the CSV and connection,
-  leaving the last voltage setting in place. Device interlocks and keepalive
-  follow the existing device configuration.
+  Before the first step, it reads and records the current device status and
+  saves the original voltage setpoint and ramp interval in a sibling
+  `*.settings.restore_pending.toml` file. On completion, Ctrl+C, or an error
+  after a settings request, it reapplies those two values once and records a
+  `restore_settings` action. A successful readback renames the backup to
+  `*.settings.restore_confirmed.toml`; a pending file remains available for
+  recovery if restoration is not confirmed. Confirmation concerns the two
+  settings, not completion of the physical voltage ramp.
+  The backup stores the values under `[original_settings]` and explains the
+  pending and confirmed filename states in its header comments.
 - Alarms and current values are recorded as observed. Communication or file
   errors are printed to the terminal and end the run without automatic retries.
   Rows already flushed remain in the file.
@@ -82,15 +95,19 @@ with their values unchanged. `observed_at` is stored as `timestamp`, and unit
 symbols in column names retain their proper case: `V`, `nA`, `K`, `W`, `A`, `Torr`.
 
 ```csv
-timestamp,event,requested_voltage_V,output_voltage_setpoint_V,output_voltage_V,output_current_nA
-2026-09-18T19:30:00.000000Z,set_voltage,3000,,,
-2026-09-18T19:30:00.100000Z,observation,,3000,2998,43
-2026-09-18T19:30:01.100000Z,observation,,3000,3002,45
+timestamp,event,requested_voltage_V,requested_ramp_interval_ms,output_voltage_setpoint_V,output_voltage_V,output_current_nA
+2026-09-18T19:29:59.900000Z,observation,,,2900,2898,43
+2026-09-18T19:30:00.000000Z,set_voltage,3000,1000,,,
+2026-09-18T19:30:00.100000Z,observation,,,3000,2998,43
+2026-09-18T19:35:00.000000Z,restore_settings,2900,10000,,,
 ```
 
 - `set_voltage`: records and flushes the requested voltage immediately before
-  the command call. Measurement columns are blank. This records intent, not
-  successful transmission or confirmed device application.
+  the command call. Its first row also records the 1000 ms ramp interval.
+  Measurement columns are blank. This records intent, not successful
+  transmission or confirmed device application.
+- `restore_settings`: records the one-time request that restores the original
+  voltage setpoint and ramp interval.
 - `observation`: contains the result of a successful `read_sample()` call. The
   requested-voltage column is blank. Both the setpoint and actual output voltage
   are values read from the device.

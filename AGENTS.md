@@ -56,11 +56,16 @@ Update these records when behavior, decisions, or validation evidence changes.
   interval. Basic input checks are separate from experimental decision-making.
 - Set each voltage once. Hold starts after the settings call returns. Read
   immediately, then poll on a monotonic schedule; skip missed sampling ticks.
-- The app changes the voltage setpoint only. Starting/stopping HV belongs to
-  the user. Closing, errors, and Ctrl+C close the file and connection without
-  sending Start, Stop, Reset, Clear Alarm, or restoring earlier settings.
-- Keep one timestamp-named CSV per invocation. `set_voltage` rows are written
-  and flushed before the call and record intent, not successful application.
+- The app changes the voltage setpoint and temporarily requests the device's
+  minimum supported ramp interval of 1000 ms. Starting/stopping HV belongs to
+  the user. Read the initial status once and save only the original setpoint and
+  ramp interval in a `restore_pending` TOML file. Restore both once after a
+  settings request, including on errors and Ctrl+C; rename the file to
+  `restore_confirmed` only after matching readback. Do not wait for the physical
+  voltage ramp to finish. Closing never sends Start, Stop, Reset, or Clear Alarm.
+- Keep one timestamp-named CSV per invocation. `set_voltage` and
+  `restore_settings` rows are written and flushed before their calls and record
+  intent, not successful application.
   `observation` rows contain successful `read_sample()` results. Keep requested
   voltage, observed setpoint, and actual output voltage distinct.
 - Preserve all returned status fields; rename `observed_at` to UTC `timestamp`.
