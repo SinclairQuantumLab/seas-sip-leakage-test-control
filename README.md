@@ -1,7 +1,8 @@
 # seas-sip-leakage-test-control
 
 A small CLI that uses `py-seas-sip-power` to change voltage in fixed steps,
-hold each voltage for a fixed time, and record device status in one CSV file.
+soak at the starting voltage, hold each later voltage, and record device status
+in one CSV file.
 
 ## Usage
 
@@ -52,17 +53,21 @@ transport = "udp"
 start_voltage_v = 3000
 step_voltage_v = 200
 stop_voltage_v = 5000
+initial_voltage_soak_time_s = 300
 hold_time_s = 300
 sample_interval_s = 1
 ```
 
-- This example holds 3000, 3200, ..., 5000 V for 300 seconds each.
+- This example soaks at the starting voltage of 3000 V for 300 seconds, then
+  holds 3200, 3400, ..., 5000 V for 300 seconds each.
 - Use a negative `step_voltage_v` for a descending sweep. Equal start and stop
   voltages produce one hold. The stop voltage is included when it lies on the
   step grid; otherwise the sequence ends before crossing it. For example,
   start 3000, step 500, stop 4200 produces 3000, 3500, 4000 V.
-- `hold_time_s` starts when the voltage-setting call returns. The first sample
-  is read immediately, without waiting for voltage or current to settle.
+- `initial_voltage_soak_time_s` is required and applies only to the first
+  voltage. Each soak or hold starts when its voltage-setting call returns. The
+  first sample is read immediately, without waiting for voltage or current to
+  settle.
 - The first voltage request also sets `output_voltage_ramp_interval_ms` to
   1000 ms, the fastest value allowed by the device manual. The permitted range
   is 1–60 seconds, so a zero ramp interval is not supported.

@@ -118,7 +118,11 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
     device.before_read = check_previous_observations_are_already_on_disk
     connection = ConnectionSettings("example.invalid")
     path = app.run_measurement(
-        connection, app.Measurement(3000, 200, 3200, 2.5), tmp_path
+        connection,
+        app.Measurement(
+            3000, 200, 3200, 2.5, initial_voltage_soak_time_s=2.5
+        ),
+        tmp_path,
     )
     factory.assert_called_once_with(connection, access_mode=AccessModeEnum.READ_WRITE)
 
@@ -197,7 +201,9 @@ def test_hold_starts_after_write_and_short_hold_has_one_sample(rig, tmp_path):
     device.write_delay = 2
     path = app.run_measurement(
         ConnectionSettings("example.invalid"),
-        app.Measurement(3000, 200, 3000, 0.5),
+        app.Measurement(
+            3000, 200, 3000, 9, initial_voltage_soak_time_s=0.5
+        ),
         tmp_path,
     )
     assert [call[1] for call in device.calls if call[0] == "read"] == [0, 2, 5.5]
@@ -210,7 +216,7 @@ def test_slow_reads_skip_missed_ticks_without_catchup_bursts(rig, tmp_path):
     device.read_delay = 1.4
     app.run_measurement(
         ConnectionSettings("example.invalid"),
-        app.Measurement(3000, 200, 3000, 3),
+        app.Measurement(3000, 200, 3000, 3, initial_voltage_soak_time_s=3),
         tmp_path,
     )
     assert [call[1] for call in device.calls if call[0] == "read"] == [
@@ -234,7 +240,7 @@ def test_failure_restores_after_a_voltage_request_and_closes(
     with pytest.raises(type(failure)):
         app.run_measurement(
             ConnectionSettings("example.invalid"),
-            app.Measurement(3000, 200, 3400, 2),
+            app.Measurement(3000, 200, 3400, 2, initial_voltage_soak_time_s=2),
             tmp_path,
         )
     rows = read_rows(next(tmp_path.glob("*.csv")))
@@ -264,18 +270,26 @@ def test_csv_failure_prevents_the_voltage_command(rig, tmp_path, monkeypatch):
     with pytest.raises(OSError, match="disk full"):
         app.run_measurement(
             ConnectionSettings("example.invalid"),
-            app.Measurement(3000, 200, 3400, 2),
+            app.Measurement(3000, 200, 3400, 2, initial_voltage_soak_time_s=2),
             tmp_path,
         )
     assert [call[0] for call in device.calls] == ["connect", "read", "close"]
 
 
 def test_voltage_grid():
-    assert list(app.Measurement(3000, 200, 3400, 1).voltages()) == [3000, 3200, 3400]
-    assert list(app.Measurement(3400, -200, 3000, 1).voltages()) == [3400, 3200, 3000]
-    assert list(app.Measurement(3000, 200, 3300, 1).voltages()) == [3000, 3200]
-    assert list(app.Measurement(3300, -200, 3000, 1).voltages()) == [3300, 3100]
-    assert list(app.Measurement(3000, 200, 3000, 1).voltages()) == [3000]
+    assert list(app.Measurement(3000, 200, 3400, 1, 1).voltages()) == [
+        3000,
+        3200,
+        3400,
+    ]
+    assert list(app.Measurement(3400, -200, 3000, 1, 1).voltages()) == [
+        3400,
+        3200,
+        3000,
+    ]
+    assert list(app.Measurement(3000, 200, 3300, 1, 1).voltages()) == [3000, 3200]
+    assert list(app.Measurement(3300, -200, 3000, 1, 1).voltages()) == [3300, 3100]
+    assert list(app.Measurement(3000, 200, 3000, 1, 1).voltages()) == [3000]
 
 
 @pytest.mark.parametrize(
@@ -288,13 +302,14 @@ def test_voltage_grid():
         {"start_voltage_v": 3000.5},
         {"hold_time_s": 0},
         {"hold_time_s": float("inf")},
+        {"initial_voltage_soak_time_s": 0},
         {"sample_interval_s": float("nan")},
         {"sample_interval_s": -1},
     ],
 )
 def test_invalid_sequences_fail_before_io(changes):
     with pytest.raises(ValueError):
-        replace(app.Measurement(3000, 200, 5000, 2), **changes)
+        replace(app.Measurement(3000, 200, 5000, 2, 2), **changes)
 
 
 @pytest.mark.parametrize("transport", ["udp", "modbus_tcp", "modbus_rtu"])
@@ -303,9 +318,11 @@ def test_config_maps_transport_once(tmp_path, transport):
     path.write_text(
         f'[connection]\naddress = "example.invalid"\ntransport = "{transport}"\n'
         "[measurement]\nstart_voltage_v = 3000\nstep_voltage_v = 200\n"
-        "stop_voltage_v = 5000\nhold_time_s = 300\n",
+        "stop_voltage_v = 5000\ninitial_voltage_soak_time_s = 600\n"
+        "hold_time_s = 300\n",
         encoding="utf-8",
     )
     connection, measurement = app.load_config(path)
     assert connection.connection_type is ConnectionTypeEnum(transport)
+    assert measurement.initial_voltage_soak_time_s == 600
     assert measurement.sample_interval_s == 1

@@ -28,6 +28,7 @@ class Measurement:
     step_voltage_v: int
     stop_voltage_v: int
     hold_time_s: float
+    initial_voltage_soak_time_s: float
     sample_interval_s: float = 1.0
 
     def __post_init__(self) -> None:
@@ -41,7 +42,11 @@ class Measurement:
             raise ValueError("step_voltage_v must not be zero")
         if (self.stop_voltage_v - self.start_voltage_v) * self.step_voltage_v < 0:
             raise ValueError("step_voltage_v must point from start toward stop")
-        for name in ("hold_time_s", "sample_interval_s"):
+        for name in (
+            "hold_time_s",
+            "sample_interval_s",
+            "initial_voltage_soak_time_s",
+        ):
             value = getattr(self, name)
             if (
                 type(value) not in (int, float)
@@ -54,6 +59,12 @@ class Measurement:
         """Include stop when it lies on the step grid; never step past it."""
         end = self.stop_voltage_v + (1 if self.step_voltage_v > 0 else -1)
         return range(self.start_voltage_v, end, self.step_voltage_v)
+
+    def hold_time_for_step(self, step_index: int) -> float:
+        """Use the separately configured soak time for the starting voltage."""
+        if step_index == 0:
+            return self.initial_voltage_soak_time_s
+        return self.hold_time_s
 
 
 def load_config(path: Path) -> tuple[ConnectionSettings, Measurement]:
@@ -227,6 +238,7 @@ def run_measurement(
             original_ramp = last_status.output_voltage_ramp_interval_ms
 
             for step_index, voltage in enumerate(measurement.voltages()):
+                step_hold_time = measurement.hold_time_for_step(step_index)
                 ramp_interval = (
                     MEASUREMENT_RAMP_INTERVAL_MS if step_index == 0 else None
                 )
@@ -249,13 +261,14 @@ def run_measurement(
                 )
                 print(
                     f"{timestamp} set_voltage: {change}{ramp_change}; {current}; "
-                    f"hold {measurement.hold_time_s:g} s",
+                    f"{'soak' if step_index == 0 else 'hold'} "
+                    f"{step_hold_time:g} s",
                     flush=True,
                 )
                 previous_voltage = voltage
 
                 next_sample = time.monotonic()
-                deadline = next_sample + measurement.hold_time_s
+                deadline = next_sample + step_hold_time
                 while (now := time.monotonic()) < deadline:
                     if now < next_sample:
                         time.sleep(min(next_sample, deadline) - now)

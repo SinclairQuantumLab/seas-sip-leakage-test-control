@@ -22,7 +22,9 @@ Updated 2026-09-18, America/Chicago.
   `output_current_nA`. The plotting notebook also accepts older lowercase headers.
 - Stdout prints the CSV path and one line per voltage-control action. Sampling
   remains CSV-only; action lines include time, voltage delta/target, last current,
-  and hold time.
+  and soak or hold time.
+- The starting voltage uses `initial_voltage_soak_time_s`; later voltages use
+  `hold_time_s`. Both values are required.
 - `plot_logs.py` is the tracked notebook source; `plot_logs.ipynb` has been
   generated locally. It reloads a chosen/latest CSV on cell execution and plots
   V(t), I(t), action timestamps, and raw I-V samples.

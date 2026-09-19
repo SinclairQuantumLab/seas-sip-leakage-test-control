@@ -18,10 +18,11 @@
   user. Do not add experiment/run IDs, magnet/pump/cable/valve metadata, expected
   serial-number checks, current-driven control policies, or external pressure
   collection unless requested.
-- Measurement settings are start/step/stop voltage, per-step hold time, and
-  sampling interval. A negative step supports descending sequences; equal start
-  and stop gives one hold. Stop is included if on the step grid, otherwise the
-  sequence ends before crossing it.
+- Measurement settings are start/step/stop voltage, a separate starting-voltage
+  soak time, later-step hold time, and sampling interval. The soak setting is
+  required. A negative step supports descending sequences; equal start and stop
+  gives one soak. Stop is included if on the step grid, otherwise the sequence
+  ends before crossing it.
 - Runtime changes the voltage setpoint and requests a 1000 ms ramp interval on
   the first step. The manual specifies 1–60 seconds, so zero is not supported.
   HV start/stop remains manual. Before control, save only the original voltage

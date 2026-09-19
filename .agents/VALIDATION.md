@@ -71,3 +71,10 @@
 - Updated the local notebook without execution. The changed loading cell's old
   outputs were cleared by Jupytext; the matching plot-cell output and notebook
   input were preserved.
+
+## Initial voltage soak, 2026-09-18
+
+- Added the required `initial_voltage_soak_time_s` setting for the starting
+  voltage; later voltage steps continue to use `hold_time_s`.
+- Ran the single directly affected scheduling check: 1 passed in 0.08 s. No
+  live device I/O was performed.

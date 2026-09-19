@@ -52,10 +52,12 @@ Update these records when behavior, decisions, or validation evidence changes.
   or distribution artifacts. The library keeps its own packaging.
 - Connection setup chooses UDP, Modbus TCP, or Modbus RTU once. Use the common
   `SAESSIPPower` API afterward; keep device protocol details in the library.
-- The measurement inputs are start/step/stop voltage, hold time, and sampling
-  interval. Basic input checks are separate from experimental decision-making.
-- Set each voltage once. Hold starts after the settings call returns. Read
-  immediately, then poll on a monotonic schedule; skip missed sampling ticks.
+- The measurement inputs are start/step/stop voltage, initial-voltage soak time,
+  later-step hold time, and sampling interval. Basic input checks are separate
+  from experimental decision-making.
+- Set each voltage once. The initial soak and later holds start after the
+  settings call returns. Read immediately, then poll on a monotonic schedule;
+  skip missed sampling ticks.
 - The app changes the voltage setpoint and temporarily requests the device's
   minimum supported ramp interval of 1000 ms. Starting/stopping HV belongs to
   the user. Read the initial status once and save only the original setpoint and
