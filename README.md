@@ -48,6 +48,7 @@ time:
 [connection]
 address = "192.168.50.34"
 transport = "udp"
+timeout_s = 3
 command_retry_count = 3
 command_retry_interval_s = 1
 

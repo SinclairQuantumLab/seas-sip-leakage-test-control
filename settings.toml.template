@@ -4,6 +4,7 @@
 # https://github.com/SinclairQuantumLab/py-seas-sip-power#connections-and-access
 address = "192.168.50.34"
 transport = "udp" # udp, modbus_tcp, or modbus_rtu
+timeout_s = 3
 # Library defaults: UDP port 2527; TCP port 502; Modbus ID 11.
 # For RTU, address is e.g. "COM3"; default baudrate is 38400 (8N2).
 # Optional connection fields: port, timeout_s, modbus_id, baudrate.
