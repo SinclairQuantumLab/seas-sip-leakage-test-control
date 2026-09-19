@@ -8,11 +8,11 @@ hold each voltage for a fixed time, and record device status in one CSV file.
 Use Python 3.14 and uv. `py-seas-sip-power/` is the local library checkout in
 this workspace, so clone the repository with its submodule:
 
-```powershell
+```bash
 git clone --recursive https://github.com/SinclairQuantumLab/seas-sip-leakage-test-control.git
-Set-Location seas-sip-leakage-test-control
+cd seas-sip-leakage-test-control
 uv sync
-Copy-Item settings.toml.template settings.toml
+cp settings.toml.template settings.toml
 ```
 
 Edit the connection address and measurement settings in `settings.toml`, then run:
