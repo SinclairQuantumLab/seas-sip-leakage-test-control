@@ -11,7 +11,7 @@ wheels/
 
 # Local measurements and configuration
 results/
-settings.toml
+settings*.toml
 
 # Notebook source is plot_logs.py; generated notebooks stay local
 *.ipynb
