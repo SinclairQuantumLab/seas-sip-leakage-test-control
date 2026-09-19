@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local measurements and configuration
+results/
+settings.toml
+
+# Notebook source is plot_logs.py; generated notebooks stay local
+*.ipynb
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.agents/local/

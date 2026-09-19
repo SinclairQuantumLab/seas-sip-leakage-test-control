@@ -1,0 +1,34 @@
+[project]
+name = "seas-sip-leakage-test-control"
+version = "0.1.0"
+description = "Stepwise SAES SIP POWER voltage control with action and observation CSV logs"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "py-seas-sip-power",
+]
+
+[project.optional-dependencies]
+serial = ["py-seas-sip-power[serial]"]
+
+[dependency-groups]
+dev = ["pytest>=9.0", "ruff>=0.15"]
+notebook = ["ipykernel>=7.3.0", "jupytext>=1.18", "matplotlib>=3.10", "pandas>=2.2"]
+
+[tool.pytest.ini_options]
+testpaths = [".agents"]
+pythonpath = ["."]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "py-seas-sip-power",
+]
+
+[tool.uv.sources]
+py-seas-sip-power = { workspace = true, editable = true }

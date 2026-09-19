@@ -1,0 +1,3 @@
+[submodule "py-seas-sip-power"]
+	path = py-seas-sip-power
+	url = https://github.com/SinclairQuantumLab/py-seas-sip-power.git
