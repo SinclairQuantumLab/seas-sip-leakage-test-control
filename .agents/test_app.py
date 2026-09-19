@@ -59,6 +59,7 @@ class Device:
         self.read_delay = 0.0
         self.write_delay = 0.0
         self.read_error = None
+        self.read_failures = []
         self.write_error = None
         self.before_write = lambda: None
         self.before_read = lambda: None
@@ -79,6 +80,10 @@ class Device:
     def read_sample(self):
         self.before_read()
         self.calls.append(("read", self.clock.now))
+        if self.read_failures:
+            error = self.read_failures.pop(0)
+            if error is not None:
+                raise error
         if self.read_error:
             raise self.read_error
         self.clock.now += self.read_delay
@@ -128,7 +133,6 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
 
     rows = read_rows(path)
     assert [row["event"] for row in rows] == [
-        "observation",
         "set_voltage",
         "observation",
         "observation",
@@ -138,11 +142,10 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
         "observation",
         "observation",
         "restore_settings",
-        "observation",
     ]
-    assert visible_observations == list(range(8))
+    assert visible_observations == [0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6]
     assert [call[1] for call in device.calls if call[0] == "set"] == pytest.approx(
-        [0.2, 2.7, 5.2]
+        [0.2, 5.2, 7.8]
     )
     assert [call[2] for call in device.calls if call[0] == "set"] == [
         {
@@ -160,28 +163,31 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
         0.3,
         1.3,
         2.3,
-        2.8,
-        3.8,
-        4.8,
-        6.2,
+        2.7,
+        3.7,
+        4.7,
+        5.3,
+        6.3,
+        7.3,
+        8.8,
     ])
     assert device.calls[-1][0] == "close"
-    assert device.calls[-1][1] == pytest.approx(6.3)
-    assert clock.now == pytest.approx(6.3)
-    assert rows[5]["requested_voltage_V"] == "3200"
-    assert rows[9]["requested_voltage_V"] == "2900"
-    assert rows[1]["requested_ramp_interval_ms"] == "1000"
-    assert rows[9]["requested_ramp_interval_ms"] == "10000"
-    assert rows[0]["requested_voltage_V"] == ""
-    assert rows[0]["output_voltage_setpoint_V"] == "2900"  # Original setpoint.
-    assert rows[0]["output_voltage_V"] == "2898"
-    assert rows[0]["enabled"] == "False"
-    assert rows[0]["global_alarm"] == "True"
-    assert rows[0]["arcing_events"] == "0"
-    assert rows[0]["pressure_Torr"] == ""
-    assert rows[0]["timestamp"] == "2026-09-18T00:00:00.000000Z"
+    assert device.calls[-1][1] == pytest.approx(8.9)
+    assert clock.now == pytest.approx(8.9)
+    assert rows[4]["requested_voltage_V"] == "3200"
+    assert rows[8]["requested_voltage_V"] == "2900"
+    assert rows[0]["requested_ramp_interval_ms"] == "1000"
+    assert rows[8]["requested_ramp_interval_ms"] == "10000"
+    assert rows[1]["requested_voltage_V"] == ""
+    assert rows[1]["output_voltage_setpoint_V"] == "2900"
+    assert rows[1]["output_voltage_V"] == "2898"
+    assert rows[1]["enabled"] == "False"
+    assert rows[1]["global_alarm"] == "True"
+    assert rows[1]["arcing_events"] == "0"
+    assert rows[1]["pressure_Torr"] == ""
+    assert rows[1]["timestamp"] == "2026-09-18T00:00:02.700000Z"
     assert all(row["timestamp"].endswith("Z") for row in rows)
-    assert "observed_at" not in rows[0]
+    assert "observed_at" not in rows[1]
     restored_files = list(tmp_path.glob("*.settings.restore_confirmed.toml"))
     assert len(restored_files) == 1
     with restored_files[0].open("rb") as stream:
@@ -199,21 +205,25 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
     assert "3200 -> 2900 V (-300 V); ramp interval 1000 -> 10000 ms" in stdout
 
 
-def test_hold_starts_after_write_and_short_hold_has_one_sample(rig, tmp_path):
+def test_soak_precedes_a_full_recording_hold(rig, tmp_path):
     clock, device, _ = rig
     device.write_delay = 2
     path = app.run_measurement(
         ConnectionSettings("example.invalid"),
         app.Measurement(
-            3000, 200, 3000, 9, initial_voltage_soak_time_s=0.5
+            3000, 200, 3000, 0.5, initial_voltage_soak_time_s=0.5
         ),
         tmp_path,
     )
     assert [call[1] for call in device.calls if call[0] == "read"] == pytest.approx(
-        [0.1, 2.3, 5.7]
+        [0.1, 2.3, 2.7, 6.2]
     )
-    assert clock.now == pytest.approx(5.8)
-    assert len(read_rows(path)) == 5
+    assert clock.now == pytest.approx(6.3)
+    assert [row["event"] for row in read_rows(path)] == [
+        "set_voltage",
+        "observation",
+        "restore_settings",
+    ]
 
 
 def test_slow_reads_skip_missed_ticks_without_catchup_bursts(rig, tmp_path):
@@ -228,10 +238,41 @@ def test_slow_reads_skip_missed_ticks_without_catchup_bursts(rig, tmp_path):
         0.1,
         1.7,
         3.7,
-        6.2,
+        5.2,
+        7.2,
+        9.7,
     ])
     assert device.calls[-1][0] == "close"
-    assert device.calls[-1][1] == pytest.approx(7.7)
+    assert device.calls[-1][1] == pytest.approx(11.2)
+
+
+def test_scheduled_read_retries_are_terminal_only_and_sequence_continues(
+    rig, tmp_path, capsys
+):
+    _, device, _ = rig
+    timeout = SAESSIPPowerCommunicationError("timeout")
+    device.read_failures = [None, None, timeout, timeout, timeout]
+    path = app.run_measurement(
+        ConnectionSettings("example.invalid"),
+        app.Measurement(
+            3000, 200, 3200, 0.5, initial_voltage_soak_time_s=0.5
+        ),
+        tmp_path,
+        app.CommandRetrySettings(count=3, interval_s=0.2),
+    )
+    rows = read_rows(path)
+    assert [row["event"] for row in rows] == [
+        "set_voltage",
+        "set_voltage",
+        "observation",
+        "restore_settings",
+    ]
+    assert rows[1]["requested_voltage_V"] == "3200"
+    assert "error" not in rows[0]
+    stderr = capsys.readouterr().err
+    assert "read_sample attempt 1/3" in stderr
+    assert "read_sample attempt 3/3" in stderr
+    assert "skipping this sample and continuing" in stderr
 
 
 @pytest.mark.parametrize(
@@ -243,11 +284,17 @@ def test_failure_restores_after_a_voltage_request_and_closes(
 ):
     _, device, _ = rig
     setattr(device, f"{operation}_error", failure)
-    with pytest.raises(type(failure)):
+    expected_error = (
+        KeyboardInterrupt
+        if isinstance(failure, KeyboardInterrupt)
+        else app.DeviceCommandFailed
+    )
+    with pytest.raises(expected_error):
         app.run_measurement(
             ConnectionSettings("example.invalid"),
             app.Measurement(3000, 200, 3400, 2, initial_voltage_soak_time_s=2),
             tmp_path,
+            app.CommandRetrySettings(count=1),
         )
     rows = read_rows(next(tmp_path.glob("*.csv")))
     if operation == "read":
@@ -255,14 +302,13 @@ def test_failure_restores_after_a_voltage_request_and_closes(
         assert [call[0] for call in device.calls].count("set") == 0
     else:
         assert [row["event"] for row in rows] == [
-            "observation",
             "set_voltage",
             "restore_settings",
         ]
-        assert rows[1]["requested_voltage_V"] == "3000"
-        assert rows[1]["requested_ramp_interval_ms"] == "1000"
-        assert rows[2]["requested_voltage_V"] == "2900"
-        assert rows[2]["requested_ramp_interval_ms"] == "10000"
+        assert rows[0]["requested_voltage_V"] == "3000"
+        assert rows[0]["requested_ramp_interval_ms"] == "1000"
+        assert rows[1]["requested_voltage_V"] == "2900"
+        assert rows[1]["requested_ramp_interval_ms"] == "10000"
         assert [call[0] for call in device.calls].count("set") == 2
         assert list(tmp_path.glob("*.settings.restore_pending.toml"))
     assert device.calls[-1][0] == "close"
@@ -323,12 +369,14 @@ def test_config_maps_transport_once(tmp_path, transport):
     path = tmp_path / "settings.toml"
     path.write_text(
         f'[connection]\naddress = "example.invalid"\ntransport = "{transport}"\n'
+        "command_retry_count = 5\ncommand_retry_interval_s = 0.25\n"
         "[measurement]\nstart_voltage_v = 3000\nstep_voltage_v = 200\n"
         "stop_voltage_v = 5000\ninitial_voltage_soak_time_s = 600\n"
         "hold_time_s = 300\n",
         encoding="utf-8",
     )
-    connection, measurement = app.load_config(path)
+    connection, measurement, command_retry = app.load_config(path)
     assert connection.connection_type is ConnectionTypeEnum(transport)
     assert measurement.initial_voltage_soak_time_s == 600
     assert measurement.sample_interval_s == 1
+    assert command_retry == app.CommandRetrySettings(count=5, interval_s=0.25)

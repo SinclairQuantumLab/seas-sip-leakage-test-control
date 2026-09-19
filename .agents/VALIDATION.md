@@ -87,3 +87,13 @@
 - Procedure errors are now printed before the cleanup/restoration announcement.
 - Ran the single directly affected scheduling check: 1 passed in 0.07 s. No
   additional live device I/O was performed.
+
+## Recording window and command retries, 2026-09-18
+
+- Starting-voltage soak reads are excluded from CSV, followed by a full
+  recording hold. Initial status and restoration readback are also excluded.
+- Retry count and interval are parsed from `[connection]`; the count is the total
+  attempts per command. Failures remain terminal-only, and an exhausted
+  scheduled read skips one sample without stopping the voltage sequence.
+- Ran the existing offline suite once: 23 passed in 0.24 s. Ruff passed for the
+  changed app and test files. No live device I/O was performed.

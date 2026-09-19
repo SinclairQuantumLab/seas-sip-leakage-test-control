@@ -19,17 +19,23 @@ Updated 2026-09-18, America/Chicago.
 - Procedure errors are printed before cleanup announces restoration. Normal
   completion is also announced before the restore request.
 - Each settings command is preceded by a flushed action CSV row. Successful
-  samples become flushed `observation` rows with all status fields.
+  samples from recording holds become flushed `observation` rows with all status
+  fields. Initial, soak, and restoration reads are not measurement rows.
+- Every device command gets the total attempt count and retry interval configured
+  under `[connection]`. Failures are terminal-only. An exhausted scheduled read
+  skips one sample while the voltage sequence continues; initial-read and
+  control/restoration failures abort.
 - CSV headers preserve unit-symbol case, such as `output_voltage_V` and
   `output_current_nA`. The plotting notebook also accepts older lowercase headers.
 - Stdout prints the CSV path and one line per voltage-control action. Sampling
   remains CSV-only; action lines include time, voltage delta/target, last current,
   and soak or hold time.
-- The starting voltage uses `initial_voltage_soak_time_s`; later voltages use
-  `hold_time_s`. Both values are required.
+- The starting voltage uses `initial_voltage_soak_time_s` without CSV recording,
+  followed by a full `hold_time_s` recording period. Later voltages each use the
+  same full recording hold. Both values are required.
 - Successful device commands are separated from the next command by at least
-  0.1 seconds. The set-to-read gap is part of the soak or hold; restoration
-  retains its one-second readback delay.
+  0.1 seconds. The first set-to-read gap is part of the soak; later recording
+  holds begin after the gap. Restoration retains its one-second readback delay.
 - `plot_logs.py` is the tracked notebook source; `plot_logs.ipynb` has been
   generated locally. It reloads a chosen/latest CSV on cell execution and plots
   V(t), I(t), action timestamps, and raw I-V samples.

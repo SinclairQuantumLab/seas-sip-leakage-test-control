@@ -50,15 +50,16 @@ Update these records when behavior, decisions, or validation evidence changes.
   or activate the environment and use `python main.py`. Keep scripts at the
   project root. Do not add a `src/` package, console entry points, build backend,
   or distribution artifacts. The library keeps its own packaging.
-- Connection setup chooses UDP, Modbus TCP, or Modbus RTU once. Use the common
-  `SAESSIPPower` API afterward; keep device protocol details in the library.
+- Connection setup chooses UDP, Modbus TCP, or Modbus RTU once. Command retry
+  count and interval are connection settings. Use the common `SAESSIPPower` API
+  afterward; keep device protocol details in the library.
 - The measurement inputs are start/step/stop voltage, initial-voltage soak time,
-  later-step hold time, and sampling interval. Basic input checks are separate
+  recording hold time, and sampling interval. Basic input checks are separate
   from experimental decision-making.
-- Set each voltage once. The initial soak and later holds start after the
-  settings call returns. Leave at least 0.1 seconds after each successful device
-  command before issuing the next one, then poll on a monotonic schedule; skip
-  missed sampling ticks. Count the set-to-read gap inside the soak or hold.
+- At the starting voltage, poll through the soak without recording observations,
+  then record for a full hold. Record for a full hold at every later voltage.
+  Leave at least 0.1 seconds after each successful device command before issuing
+  the next one, poll on a monotonic schedule, and skip missed sampling ticks.
 - The app changes the voltage setpoint and temporarily requests the device's
   minimum supported ramp interval of 1000 ms. Starting/stopping HV belongs to
   the user. Read the initial status once and save only the original setpoint and
@@ -72,13 +73,16 @@ Update these records when behavior, decisions, or validation evidence changes.
 - Keep one timestamp-named CSV per invocation. `set_voltage` and
   `restore_settings` rows are written and flushed before their calls and record
   intent, not successful application.
-  `observation` rows contain successful `read_sample()` results. Keep requested
-  voltage, observed setpoint, and actual output voltage distinct.
+  `observation` rows contain successful recording-hold samples only. Initial,
+  soak, and restoration readbacks are not measurement observations. Keep
+  requested voltage, observed setpoint, and actual output voltage distinct.
 - Preserve all returned status fields; rename `observed_at` to UTC `timestamp`.
   CSV headers use proper unit-symbol case (`V`, `nA`, `K`, `W`, `A`, `Torr`);
   settings keys and library API names keep their existing spelling.
-  Unknown observations stay blank. Never replace failed reads with fake samples
-  or retry an uncertain write automatically. Flush the header and every row.
+  Unknown observations stay blank. Give each device command the configured total
+  number of attempts and print failures only to the terminal. After all attempts,
+  skip a failed scheduled sample and continue the voltage sequence; initial-read,
+  settings-write, and restoration failures abort. Flush the header and every row.
 - The notebook snapshots the CSV, excludes any incomplete trailing line, and
   plots observations and action timestamps. It never accesses the device.
 - Use offline fakes for development. A request to implement or test software

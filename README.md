@@ -1,8 +1,8 @@
 # seas-sip-leakage-test-control
 
 A small CLI that uses `py-seas-sip-power` to change voltage in fixed steps,
-soak at the starting voltage, hold each later voltage, and record device status
-in one CSV file.
+wait for stabilization at the starting voltage, and record device status during
+a fixed hold at every voltage in one CSV file.
 
 ## Usage
 
@@ -48,6 +48,8 @@ time:
 [connection]
 address = "192.168.50.34"
 transport = "udp"
+command_retry_count = 3
+command_retry_interval_s = 1
 
 [measurement]
 start_voltage_v = 3000
@@ -58,25 +60,29 @@ hold_time_s = 300
 sample_interval_s = 1
 ```
 
-- This example soaks at the starting voltage of 3000 V for 300 seconds, then
-  holds 3200, 3400, ..., 5000 V for 300 seconds each.
+- This example waits 300 seconds for stabilization at the starting voltage,
+  records there for another 300 seconds, then records at 3200, 3400, ...,
+  5000 V for 300 seconds each.
 - Use a negative `step_voltage_v` for a descending sweep. Equal start and stop
   voltages produce one hold. The stop voltage is included when it lies on the
   step grid; otherwise the sequence ends before crossing it. For example,
   start 3000, step 500, stop 4200 produces 3000, 3500, 4000 V.
-- `initial_voltage_soak_time_s` is required and applies only to the first
-  voltage. Each soak or hold starts when its voltage-setting call returns. The
-  app leaves at least 0.1 seconds after every successful device command before
-  issuing the next one. The set-to-read gap is included in the configured soak
-  or hold time. Restoration keeps its longer one-second readback delay.
+- `initial_voltage_soak_time_s` is required and applies before recording at the
+  first voltage. The app polls during this stabilization period but does not
+  write those values to CSV. It then records for the full `hold_time_s` at the
+  starting voltage. Every later voltage also gets the full recording hold.
+- The app leaves at least 0.1 seconds after every successful device command
+  before issuing the next one. The first set-to-read gap is part of the soak;
+  at later voltages the recording hold starts after this gap. Restoration keeps
+  its longer one-second readback delay.
 - The first voltage request also sets `output_voltage_ramp_interval_ms` to
   1000 ms, the fastest value allowed by the device manual. The permitted range
   is 1–60 seconds, so a zero ramp interval is not supported.
 - Sampling uses a monotonic clock. Slow communication skips missed sampling
   ticks; an in-progress communication call can also delay the end of a hold.
 - The app changes the voltage setpoint. The user starts and stops HV operation.
-  Before the first step, it reads and records the current device status and
-  saves the original voltage setpoint and ramp interval in a sibling
+  Before the first step, it reads the current device status and saves the
+  original voltage setpoint and ramp interval in a sibling
   `*.settings.restore_pending.toml` file. On completion, Ctrl+C, or an error
   after a settings request, it reapplies those two values once and records a
   `restore_settings` action. A successful readback renames the backup to
@@ -85,12 +91,14 @@ sample_interval_s = 1
   settings, not completion of the physical voltage ramp.
   The backup stores the values under `[original_settings]` and explains the
   pending and confirmed filename states in its header comments.
-- Alarms and current values are recorded as observed. Communication or file
-  errors are printed to the terminal and end the run without automatic retries.
-  When a procedure error occurs after a settings change, the terminal shows the
-  error first, then announces that the aborted procedure is restoring the
-  original settings. Normal completion is announced before restoration as well.
-  Rows already flushed remain in the file.
+- `command_retry_count` is the total number of attempts allowed for each device
+  command; `command_retry_interval_s` is the delay after a failed attempt. These
+  communication settings belong under `[connection]`. Failures are printed to
+  the terminal and are not written to CSV. If every attempt for a scheduled
+  read fails, that sample is skipped and the voltage sequence continues. An
+  initial read, settings write, restoration, or file failure still aborts the
+  procedure. For an abort after a settings change, the terminal shows the error
+  first and then announces restoration. Rows already flushed remain in the file.
 
 Choose `udp`, `modbus_tcp`, or `modbus_rtu` for the transport. Optional connection
 fields are `port`, `timeout_s`, `modbus_id`, and `baudrate`; defaults come from the
@@ -105,10 +113,10 @@ symbols in column names retain their proper case: `V`, `nA`, `K`, `W`, `A`, `Tor
 
 ```csv
 timestamp,event,requested_voltage_V,requested_ramp_interval_ms,output_voltage_setpoint_V,output_voltage_V,output_current_nA
-2026-09-18T19:29:59.900000Z,observation,,,2900,2898,43
 2026-09-18T19:30:00.000000Z,set_voltage,3000,1000,,,
-2026-09-18T19:30:00.100000Z,observation,,,3000,2998,43
-2026-09-18T19:35:00.000000Z,restore_settings,2900,10000,,,
+2026-09-18T19:35:00.000000Z,observation,,,3000,2998,43
+2026-09-18T19:40:00.000000Z,set_voltage,3200,,,,
+2026-09-18T19:45:00.000000Z,restore_settings,2900,10000,,,
 ```
 
 - `set_voltage`: records and flushes the requested voltage immediately before
@@ -117,9 +125,10 @@ timestamp,event,requested_voltage_V,requested_ramp_interval_ms,output_voltage_se
   transmission or confirmed device application.
 - `restore_settings`: records the one-time request that restores the original
   voltage setpoint and ramp interval.
-- `observation`: contains the result of a successful `read_sample()` call. The
-  requested-voltage column is blank. Both the setpoint and actual output voltage
-  are values read from the device.
+- `observation`: contains a successful `read_sample()` result from a configured
+  recording hold. Initial status, starting-voltage soak, and restoration
+  readback values are not measurement rows. The requested-voltage column is
+  blank. Both the setpoint and actual output voltage are read from the device.
 - Timestamps use ISO 8601 UTC. Actions use the host time immediately before the
   call; observations use the library's `observed_at`.
 - Units follow the library values, with corrected symbol case in CSV headers.

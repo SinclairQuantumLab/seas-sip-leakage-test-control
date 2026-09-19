@@ -18,14 +18,14 @@
   user. Do not add experiment/run IDs, magnet/pump/cable/valve metadata, expected
   serial-number checks, current-driven control policies, or external pressure
   collection unless requested.
-- Measurement settings are start/step/stop voltage, a separate starting-voltage
-  soak time, later-step hold time, and sampling interval. The soak setting is
-  required. A negative step supports descending sequences; equal start and stop
-  gives one soak. Stop is included if on the step grid, otherwise the sequence
-  ends before crossing it.
+- Measurement settings are start/step/stop voltage, a starting-voltage soak
+  time, recording hold time, and sampling interval. At the starting voltage,
+  poll without logging through the soak and then log a full hold; later voltages
+  each receive a full recording hold.
 - Leave at least 0.1 seconds after every successful device command before the
-  next device command. Count a voltage set-to-read gap inside that step's soak
-  or hold. Keep the longer one-second delay before restoration readback.
+  next device command. Count the first voltage's set-to-read gap inside the soak;
+  start later recording holds after the gap. Keep the longer one-second delay
+  before restoration readback.
 - Runtime changes the voltage setpoint and requests a 1000 ms ramp interval on
   the first step. The manual specifies 1–60 seconds, so zero is not supported.
   HV start/stop remains manual. Before control, save only the original voltage
@@ -42,6 +42,13 @@
 - One CSV contains both `set_voltage` and `observation` events. Action intent is
   flushed before the command; observed values are never inferred from requests.
   UTC filenames are generated automatically. Every header/row is flushed.
+- Retry count and interval are connection settings. The count is the total
+  attempts available to each device command. Command failures are printed only
+  to the terminal. After all attempts, a scheduled read skips that sample and
+  the voltage sequence continues; initial-read, settings-write, restoration,
+  and file failures abort.
+- Only samples from recording holds become `observation` rows. Initial status,
+  starting-voltage soak, and restoration readbacks do not enter the CSV.
 - All `DeviceStatus` fields are preserved; `observed_at` becomes `timestamp`.
   The app performs no extra pressure calculation or measurement interpretation.
 - Plotting is a separate user-facing notebook that reloads saved CSV data when

@@ -6,6 +6,7 @@ import math
 import sys
 import time
 import tomllib
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path
@@ -61,22 +62,41 @@ class Measurement:
         end = self.stop_voltage_v + (1 if self.step_voltage_v > 0 else -1)
         return range(self.start_voltage_v, end, self.step_voltage_v)
 
-    def hold_time_for_step(self, step_index: int) -> float:
-        """Use the separately configured soak time for the starting voltage."""
-        if step_index == 0:
-            return self.initial_voltage_soak_time_s
-        return self.hold_time_s
+
+@dataclass(frozen=True)
+class CommandRetrySettings:
+    """Retry policy for device communication commands."""
+
+    count: int = 3
+    interval_s: float = 1.0
+
+    def __post_init__(self) -> None:
+        if type(self.count) is not int or self.count <= 0:
+            raise ValueError("command_retry_count must be a positive integer")
+        if (
+            type(self.interval_s) not in (int, float)
+            or not math.isfinite(self.interval_s)
+            or self.interval_s <= 0
+        ):
+            raise ValueError("command_retry_interval_s must be positive and finite")
 
 
-def load_config(path: Path) -> tuple[ConnectionSettings, Measurement]:
+def load_config(
+    path: Path,
+) -> tuple[ConnectionSettings, Measurement, CommandRetrySettings]:
     """Read connection settings and measurement timing from TOML."""
     with path.open("rb") as stream:
         config = tomllib.load(stream)
     connection = dict(config["connection"])
     transport = ConnectionTypeEnum(connection.pop("transport", "udp"))
+    command_retry = CommandRetrySettings(
+        count=connection.pop("command_retry_count", 3),
+        interval_s=connection.pop("command_retry_interval_s", 1.0),
+    )
     return (
         ConnectionSettings(connection_type=transport, **connection),
         Measurement(**config["measurement"]),
+        command_retry,
     )
 
 
@@ -206,13 +226,47 @@ class CsvLog:
         self.writer.writerow(row)
         self.stream.flush()
 
+class DeviceCommandFailed(RuntimeError):
+    """Report that a device command exhausted all configured attempts."""
+
+
+def run_device_command[CommandResult](
+    command: str,
+    operation: Callable[[], CommandResult],
+    command_retry: CommandRetrySettings,
+) -> CommandResult:
+    """Run one device command and retry failures at the configured interval."""
+    max_attempts = command_retry.count
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            if attempt < max_attempts:
+                suffix = f"retrying in {command_retry.interval_s:g} s"
+            else:
+                suffix = "command failed"
+            print(
+                f"Command error: {command} attempt "
+                f"{attempt}/{max_attempts}: {exc}; {suffix}",
+                file=sys.stderr,
+                flush=True,
+            )
+            if attempt == max_attempts:
+                time.sleep(COMMAND_GAP_S)
+                raise DeviceCommandFailed(
+                    f"{command} failed after {max_attempts} attempts: {exc}"
+                ) from exc
+            time.sleep(command_retry.interval_s)
+    raise AssertionError("unreachable")
+
 
 def run_measurement(
     connection: ConnectionSettings,
     measurement: Measurement,
     output_dir: Path = Path("results"),
+    command_retry: CommandRetrySettings = CommandRetrySettings(),
 ) -> Path:
-    """Set each voltage once and log samples for the configured hold time."""
+    """Request each voltage and log samples during each recording hold."""
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{datetime.now(UTC):%Y%m%d_%H%M%S_%fZ}"
     path = output_dir / f"{stem}.csv"
@@ -228,22 +282,57 @@ def run_measurement(
         last_status = None
         settings_were_requested = False
         procedure_aborted = False
+
+        def sample_until(deadline: float, *, record: bool) -> None:
+            """Poll on schedule until a deadline and optionally write samples."""
+            nonlocal last_status
+            next_sample = time.monotonic()
+            while (now := time.monotonic()) < deadline:
+                if now < next_sample:
+                    time.sleep(min(next_sample, deadline) - now)
+                    continue
+                try:
+                    last_status = run_device_command(
+                        "read_sample", device.read_sample, command_retry
+                    )
+                except DeviceCommandFailed:
+                    print(
+                        "Scheduled read failed; skipping this sample and continuing.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                else:
+                    time.sleep(COMMAND_GAP_S)
+                    if record:
+                        log.observation(last_status)
+                next_sample += measurement.sample_interval_s
+                # Skip missed ticks instead of issuing a burst of reads.
+                now = time.monotonic()
+                if next_sample < now:
+                    missed = (
+                        math.floor(
+                            (now - next_sample) / measurement.sample_interval_s
+                        )
+                        + 1
+                    )
+                    next_sample += missed * measurement.sample_interval_s
+
         try:
-            device.connect()
+            run_device_command("connect", device.connect, command_retry)
             time.sleep(COMMAND_GAP_S)
-            last_status = device.read_sample()
+            last_status = run_device_command(
+                "read_initial_status", device.read_sample, command_retry
+            )
             time.sleep(COMMAND_GAP_S)
             original_settings = capture_original_settings(last_status)
             write_settings_snapshot(
                 pending_settings_path, last_status, original_settings, path.name
             )
             print(f"Settings backup: {pending_settings_path.resolve()}", flush=True)
-            log.observation(last_status)
             previous_voltage = last_status.output_voltage_setpoint_v
             original_ramp = last_status.output_voltage_ramp_interval_ms
 
             for step_index, voltage in enumerate(measurement.voltages()):
-                step_hold_time = measurement.hold_time_for_step(step_index)
                 ramp_interval = (
                     MEASUREMENT_RAMP_INTERVAL_MS if step_index == 0 else None
                 )
@@ -255,8 +344,12 @@ def run_measurement(
                     requested_settings["output_voltage_ramp_interval_ms"] = (
                         ramp_interval
                     )
-                device.set_working_parameters(**requested_settings)
-                hold_started = time.monotonic()
+                run_device_command(
+                    "set_working_parameters",
+                    lambda: device.set_working_parameters(**requested_settings),
+                    command_retry,
+                )
+                setting_completed = time.monotonic()
                 time.sleep(COMMAND_GAP_S)
                 delta = voltage - previous_voltage
                 change = f"{previous_voltage} -> {voltage} V ({delta:+d} V)"
@@ -268,32 +361,26 @@ def run_measurement(
                 )
                 print(
                     f"{timestamp} set_voltage: {change}{ramp_change}; {current}; "
-                    f"{'soak' if step_index == 0 else 'hold'} "
-                    f"{step_hold_time:g} s",
+                    + (
+                        f"soak {measurement.initial_voltage_soak_time_s:g} s, "
+                        f"then record {measurement.hold_time_s:g} s"
+                        if step_index == 0
+                        else f"record {measurement.hold_time_s:g} s"
+                    ),
                     flush=True,
                 )
                 previous_voltage = voltage
 
-                next_sample = time.monotonic()
-                deadline = hold_started + step_hold_time
-                while (now := time.monotonic()) < deadline:
-                    if now < next_sample:
-                        time.sleep(min(next_sample, deadline) - now)
-                        continue
-                    last_status = device.read_sample()
-                    time.sleep(COMMAND_GAP_S)
-                    log.observation(last_status)
-                    next_sample += measurement.sample_interval_s
-                    # Skip missed ticks instead of issuing a burst of reads.
-                    now = time.monotonic()
-                    if next_sample < now:
-                        missed = (
-                            math.floor(
-                                (now - next_sample) / measurement.sample_interval_s
-                            )
-                            + 1
-                        )
-                        next_sample += missed * measurement.sample_interval_s
+                if step_index == 0:
+                    sample_until(
+                        setting_completed + measurement.initial_voltage_soak_time_s,
+                        record=False,
+                    )
+                recording_started = time.monotonic()
+                sample_until(
+                    recording_started + measurement.hold_time_s,
+                    record=True,
+                )
         except KeyboardInterrupt as exc:
             procedure_aborted = True
             setattr(exc, "_sip_error_reported", True)
@@ -324,11 +411,18 @@ def run_measurement(
                     timestamp = log.restore_settings(
                         original_voltage, original_ramp
                     )
-                    device.set_working_parameters(**original_settings)
+                    run_device_command(
+                        "restore_settings",
+                        lambda: device.set_working_parameters(**original_settings),
+                        command_retry,
+                    )
                     time.sleep(1.0)
-                    restored_status = device.read_sample()
+                    restored_status = run_device_command(
+                        "read_restored_settings",
+                        device.read_sample,
+                        command_retry,
+                    )
                     time.sleep(COMMAND_GAP_S)
-                    log.observation(restored_status)
                     if not settings_match(restored_status, original_settings):
                         raise RuntimeError(
                             "restored settings did not match the saved "
@@ -350,7 +444,7 @@ def run_measurement(
                         flush=True,
                     )
             finally:
-                device.close()
+                run_device_command("close", device.close, command_retry)
     return path
 
 
@@ -379,8 +473,10 @@ def main() -> None:
         )
     settings_path = args.settings_option or args.settings_file or Path("settings.toml")
     try:
-        connection, measurement = load_config(settings_path)
-        path = run_measurement(connection, measurement)
+        connection, measurement, command_retry = load_config(settings_path)
+        path = run_measurement(
+            connection, measurement, command_retry=command_retry
+        )
     except KeyboardInterrupt as exc:
         message = (
             None

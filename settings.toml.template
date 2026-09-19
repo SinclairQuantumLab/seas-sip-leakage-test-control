@@ -7,13 +7,17 @@ transport = "udp" # udp, modbus_tcp, or modbus_rtu
 # Library defaults: UDP port 2527; TCP port 502; Modbus ID 11.
 # For RTU, address is e.g. "COM3"; default baudrate is 38400 (8N2).
 # Optional connection fields: port, timeout_s, modbus_id, baudrate.
+# Total number of attempts allowed for each device command.
+command_retry_count = 3
+# Delay between command attempts after a failure.
+command_retry_interval_s = 1
 
 [measurement]
 start_voltage_v = 3000
 step_voltage_v = 200
 stop_voltage_v = 5000
-# Sampling duration at the starting voltage.
+# Stabilization time at the starting voltage. Samples are not recorded during it.
 initial_voltage_soak_time_s = 300
-# Sampling duration at every later voltage.
+# Data-recording duration at every voltage, including the starting voltage.
 hold_time_s = 300
 sample_interval_s = 1
