@@ -56,8 +56,9 @@ Update these records when behavior, decisions, or validation evidence changes.
   later-step hold time, and sampling interval. Basic input checks are separate
   from experimental decision-making.
 - Set each voltage once. The initial soak and later holds start after the
-  settings call returns. Read immediately, then poll on a monotonic schedule;
-  skip missed sampling ticks.
+  settings call returns. Leave at least 0.1 seconds after each successful device
+  command before issuing the next one, then poll on a monotonic schedule; skip
+  missed sampling ticks. Count the set-to-read gap inside the soak or hold.
 - The app changes the voltage setpoint and temporarily requests the device's
   minimum supported ramp interval of 1000 ms. Starting/stopping HV belongs to
   the user. Read the initial status once and save only the original setpoint and
@@ -65,6 +66,9 @@ Update these records when behavior, decisions, or validation evidence changes.
   settings request, including on errors and Ctrl+C; rename the file to
   `restore_confirmed` only after matching readback. Do not wait for the physical
   voltage ramp to finish. Closing never sends Start, Stop, Reset, or Clear Alarm.
+- Print a procedure error before cleanup starts. Then announce whether the
+  procedure aborted or completed before requesting restoration, so terminal
+  output reflects the actual event order.
 - Keep one timestamp-named CSV per invocation. `set_voltage` and
   `restore_settings` rows are written and flushed before their calls and record
   intent, not successful application.

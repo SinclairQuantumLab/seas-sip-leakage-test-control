@@ -66,8 +66,9 @@ sample_interval_s = 1
   start 3000, step 500, stop 4200 produces 3000, 3500, 4000 V.
 - `initial_voltage_soak_time_s` is required and applies only to the first
   voltage. Each soak or hold starts when its voltage-setting call returns. The
-  first sample is read immediately, without waiting for voltage or current to
-  settle.
+  app leaves at least 0.1 seconds after every successful device command before
+  issuing the next one. The set-to-read gap is included in the configured soak
+  or hold time. Restoration keeps its longer one-second readback delay.
 - The first voltage request also sets `output_voltage_ramp_interval_ms` to
   1000 ms, the fastest value allowed by the device manual. The permitted range
   is 1–60 seconds, so a zero ramp interval is not supported.
@@ -86,6 +87,9 @@ sample_interval_s = 1
   pending and confirmed filename states in its header comments.
 - Alarms and current values are recorded as observed. Communication or file
   errors are printed to the terminal and end the run without automatic retries.
+  When a procedure error occurs after a settings change, the terminal shows the
+  error first, then announces that the aborted procedure is restoring the
+  original settings. Normal completion is announced before restoration as well.
   Rows already flushed remain in the file.
 
 Choose `udp`, `modbus_tcp`, or `modbus_rtu` for the transport. Optional connection

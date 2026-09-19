@@ -23,6 +23,9 @@
   required. A negative step supports descending sequences; equal start and stop
   gives one soak. Stop is included if on the step grid, otherwise the sequence
   ends before crossing it.
+- Leave at least 0.1 seconds after every successful device command before the
+  next device command. Count a voltage set-to-read gap inside that step's soak
+  or hold. Keep the longer one-second delay before restoration readback.
 - Runtime changes the voltage setpoint and requests a 1000 ms ramp interval on
   the first step. The manual specifies 1–60 seconds, so zero is not supported.
   HV start/stop remains manual. Before control, save only the original voltage
@@ -30,6 +33,9 @@
   on normal completion, interruption, or error after a settings request and log
   `restore_settings`. Rename the backup to `restore_confirmed` only after a
   matching readback. Do not wait for the physical voltage ramp to finish.
+- Terminal ordering follows the event sequence: print a procedure error first,
+  announce that an aborted or completed procedure is restoring settings, then
+  print restoration and confirmation results.
 - CLI + TOML + CSV are the user interface. Default file: `settings.toml`;
   template: `settings.toml.template`. Connection comments link to
   <https://github.com/SinclairQuantumLab/py-seas-sip-power#connections-and-access>.

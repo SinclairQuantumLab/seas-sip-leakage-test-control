@@ -141,7 +141,9 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
         "observation",
     ]
     assert visible_observations == list(range(8))
-    assert [call[1] for call in device.calls if call[0] == "set"] == [0, 2.5, 5]
+    assert [call[1] for call in device.calls if call[0] == "set"] == pytest.approx(
+        [0.2, 2.7, 5.2]
+    )
     assert [call[2] for call in device.calls if call[0] == "set"] == [
         {
             "output_voltage_setpoint_v": 3000,
@@ -153,18 +155,19 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
             "output_voltage_ramp_interval_ms": 10000,
         },
     ]
-    assert [call[1] for call in device.calls if call[0] == "read"] == [
-        0,
-        0,
-        1,
-        2,
-        2.5,
-        3.5,
-        4.5,
-        6,
-    ]
-    assert device.calls[-1] == ("close", 6)
-    assert clock.now == 6  # Includes one second before restoration readback.
+    assert [call[1] for call in device.calls if call[0] == "read"] == pytest.approx([
+        0.1,
+        0.3,
+        1.3,
+        2.3,
+        2.8,
+        3.8,
+        4.8,
+        6.2,
+    ])
+    assert device.calls[-1][0] == "close"
+    assert device.calls[-1][1] == pytest.approx(6.3)
+    assert clock.now == pytest.approx(6.3)
     assert rows[5]["requested_voltage_V"] == "3200"
     assert rows[9]["requested_voltage_V"] == "2900"
     assert rows[1]["requested_ramp_interval_ms"] == "1000"
@@ -206,8 +209,10 @@ def test_hold_starts_after_write_and_short_hold_has_one_sample(rig, tmp_path):
         ),
         tmp_path,
     )
-    assert [call[1] for call in device.calls if call[0] == "read"] == [0, 2, 5.5]
-    assert clock.now == 5.5
+    assert [call[1] for call in device.calls if call[0] == "read"] == pytest.approx(
+        [0.1, 2.3, 5.7]
+    )
+    assert clock.now == pytest.approx(5.8)
     assert len(read_rows(path)) == 5
 
 
@@ -219,13 +224,14 @@ def test_slow_reads_skip_missed_ticks_without_catchup_bursts(rig, tmp_path):
         app.Measurement(3000, 200, 3000, 3, initial_voltage_soak_time_s=3),
         tmp_path,
     )
-    assert [call[1] for call in device.calls if call[0] == "read"] == [
-        0,
-        1.4,
-        3.4,
-        5.8,
-    ]
-    assert device.calls[-1] == ("close", 7.2)
+    assert [call[1] for call in device.calls if call[0] == "read"] == pytest.approx([
+        0.1,
+        1.7,
+        3.7,
+        6.2,
+    ])
+    assert device.calls[-1][0] == "close"
+    assert device.calls[-1][1] == pytest.approx(7.7)
 
 
 @pytest.mark.parametrize(

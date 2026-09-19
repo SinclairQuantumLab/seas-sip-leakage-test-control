@@ -3,6 +3,7 @@
 import argparse
 import csv
 import math
+import sys
 import time
 import tomllib
 from dataclasses import asdict, dataclass, fields
@@ -114,6 +115,7 @@ CHANGED_SETTING_FIELDS = (
     "output_voltage_ramp_interval_ms",
 )
 MEASUREMENT_RAMP_INTERVAL_MS = 1000
+COMMAND_GAP_S = 0.1
 
 
 def capture_original_settings(status: DeviceStatus) -> dict[str, int]:
@@ -225,9 +227,12 @@ def run_measurement(
         last_requested_voltage = None
         last_status = None
         settings_were_requested = False
+        procedure_aborted = False
         try:
             device.connect()
+            time.sleep(COMMAND_GAP_S)
             last_status = device.read_sample()
+            time.sleep(COMMAND_GAP_S)
             original_settings = capture_original_settings(last_status)
             write_settings_snapshot(
                 pending_settings_path, last_status, original_settings, path.name
@@ -251,6 +256,8 @@ def run_measurement(
                         ramp_interval
                     )
                 device.set_working_parameters(**requested_settings)
+                hold_started = time.monotonic()
+                time.sleep(COMMAND_GAP_S)
                 delta = voltage - previous_voltage
                 change = f"{previous_voltage} -> {voltage} V ({delta:+d} V)"
                 current = f"last current {last_status.output_current_na} nA"
@@ -268,12 +275,13 @@ def run_measurement(
                 previous_voltage = voltage
 
                 next_sample = time.monotonic()
-                deadline = next_sample + step_hold_time
+                deadline = hold_started + step_hold_time
                 while (now := time.monotonic()) < deadline:
                     if now < next_sample:
                         time.sleep(min(next_sample, deadline) - now)
                         continue
                     last_status = device.read_sample()
+                    time.sleep(COMMAND_GAP_S)
                     log.observation(last_status)
                     next_sample += measurement.sample_interval_s
                     # Skip missed ticks instead of issuing a burst of reads.
@@ -286,9 +294,29 @@ def run_measurement(
                             + 1
                         )
                         next_sample += missed * measurement.sample_interval_s
+        except KeyboardInterrupt as exc:
+            procedure_aborted = True
+            setattr(exc, "_sip_error_reported", True)
+            print(
+                "Interrupted. Rows already written remain in the CSV.",
+                file=sys.stderr,
+                flush=True,
+            )
+            raise
+        except Exception as exc:
+            procedure_aborted = True
+            setattr(exc, "_sip_error_reported", True)
+            print(f"Error: {exc}", file=sys.stderr, flush=True)
+            raise
         finally:
             try:
                 if original_settings is not None and settings_were_requested:
+                    outcome = "aborted" if procedure_aborted else "completed"
+                    print(
+                        f"Procedure {outcome}; restoring original settings.",
+                        file=sys.stderr if procedure_aborted else sys.stdout,
+                        flush=True,
+                    )
                     original_voltage = original_settings["output_voltage_setpoint_v"]
                     original_ramp = original_settings[
                         "output_voltage_ramp_interval_ms"
@@ -299,6 +327,7 @@ def run_measurement(
                     device.set_working_parameters(**original_settings)
                     time.sleep(1.0)
                     restored_status = device.read_sample()
+                    time.sleep(COMMAND_GAP_S)
                     log.observation(restored_status)
                     if not settings_match(restored_status, original_settings):
                         raise RuntimeError(
@@ -352,8 +381,13 @@ def main() -> None:
     try:
         connection, measurement = load_config(settings_path)
         path = run_measurement(connection, measurement)
-    except KeyboardInterrupt:
-        parser.exit(130, "Interrupted. Rows already written remain in the CSV.\n")
+    except KeyboardInterrupt as exc:
+        message = (
+            None
+            if getattr(exc, "_sip_error_reported", False)
+            else "Interrupted. Rows already written remain in the CSV.\n"
+        )
+        parser.exit(130, message)
     except (
         OSError,
         RuntimeError,
@@ -362,7 +396,12 @@ def main() -> None:
         KeyError,
         SAESSIPPowerError,
     ) as exc:
-        parser.exit(1, f"Error: {exc}\n")
+        message = (
+            None
+            if getattr(exc, "_sip_error_reported", False)
+            else f"Error: {exc}\n"
+        )
+        parser.exit(1, message)
     print(f"Completed: {path}")
 
 

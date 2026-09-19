@@ -78,3 +78,12 @@
   voltage; later voltage steps continue to use `hold_time_s`.
 - Ran the single directly affected scheduling check: 1 passed in 0.08 s. No
   live device I/O was performed.
+
+## Device command spacing and error ordering, 2026-09-18
+
+- Added a minimum 0.1-second gap after successful device commands; restoration
+  retains its longer one-second set-to-read gap. The gap is included in soak and
+  hold timing.
+- Procedure errors are now printed before the cleanup/restoration announcement.
+- Ran the single directly affected scheduling check: 1 passed in 0.07 s. No
+  additional live device I/O was performed.

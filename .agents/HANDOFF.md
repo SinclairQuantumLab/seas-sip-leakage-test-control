@@ -16,6 +16,8 @@ Updated 2026-09-18, America/Chicago.
   in a `restore_pending` TOML file. The first voltage command also requests the
   device's minimum supported 1000 ms ramp interval. On cleanup it restores both
   settings; matching readback renames the file to `restore_confirmed`.
+- Procedure errors are printed before cleanup announces restoration. Normal
+  completion is also announced before the restore request.
 - Each settings command is preceded by a flushed action CSV row. Successful
   samples become flushed `observation` rows with all status fields.
 - CSV headers preserve unit-symbol case, such as `output_voltage_V` and
@@ -25,6 +27,9 @@ Updated 2026-09-18, America/Chicago.
   and soak or hold time.
 - The starting voltage uses `initial_voltage_soak_time_s`; later voltages use
   `hold_time_s`. Both values are required.
+- Successful device commands are separated from the next command by at least
+  0.1 seconds. The set-to-read gap is part of the soak or hold; restoration
+  retains its one-second readback delay.
 - `plot_logs.py` is the tracked notebook source; `plot_logs.ipynb` has been
   generated locally. It reloads a chosen/latest CSV on cell execution and plots
   V(t), I(t), action timestamps, and raw I-V samples.
