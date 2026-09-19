@@ -9,7 +9,7 @@ Use Python 3.14 and uv. `py-seas-sip-power/` is the local library checkout in
 this workspace, so clone the repository with its submodule:
 
 ```powershell
-git clone --recursive <repository-url>
+git clone --recursive https://github.com/SinclairQuantumLab/seas-sip-leakage-test-control.git
 Set-Location seas-sip-leakage-test-control
 uv sync
 Copy-Item settings.toml.template settings.toml
