@@ -13,7 +13,13 @@ serial = ["py-seas-sip-power[serial]"]
 
 [dependency-groups]
 dev = ["pytest>=9.0", "ruff>=0.15"]
-notebook = ["ipykernel>=7.3.0", "jupytext>=1.18", "matplotlib>=3.10", "pandas>=2.2"]
+notebook = [
+    "brokenaxes>=0.6.2",
+    "ipykernel>=7.3.0",
+    "jupytext>=1.18",
+    "matplotlib>=3.10",
+    "pandas>=2.2",
+]
 
 [tool.pytest.ini_options]
 testpaths = [".agents"]
