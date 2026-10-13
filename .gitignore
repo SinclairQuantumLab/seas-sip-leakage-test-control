@@ -16,6 +16,7 @@ settings*.toml
 # Notebook source is plot_logs.py; generated notebooks stay local
 *.ipynb
 .ipynb_checkpoints/
+.jupyter-temp/
 .pytest_cache/
 .ruff_cache/
 .agents/local/

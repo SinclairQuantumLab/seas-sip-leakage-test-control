@@ -106,14 +106,17 @@ change: use existing relevant checks once, do not add tests for simple file move
 or documentation changes, and do not build distributions. Record actual results
 in `.agents/VALIDATION.md`, distinguishing offline checks from hardware evidence.
 
-When changing `plot_logs.py`, inspect and preserve any newer local notebook
-inputs and outputs first. Update the local notebook without executing it:
+When changing a plotting Jupytext source, inspect and preserve any newer local
+notebook inputs and outputs first. For changes limited to plotting sources and
+generated notebooks, do not run tests, lint, render checks, cell-equivalence
+checks, or any other validation unless the user explicitly requests it. Update
+the local notebook without executing it:
 
 ```powershell
 uv sync --group notebook
 uv run --group notebook jupytext --to ipynb --update plot_logs.py
 ```
 
-Keep a usable local notebook, verify its cells match the source, and preserve
-matching outputs. The notebook is ignored by Git; that does not make it
-disposable. Do not rerun device operations as part of notebook verification.
+Keep the local notebook and matching outputs intact. The notebook is ignored by
+Git; that does not make it disposable. Execute the notebook only when the user
+explicitly requests execution. The notebook never performs device operations.
