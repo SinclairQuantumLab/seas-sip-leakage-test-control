@@ -39,6 +39,10 @@ Updated 2026-09-18, America/Chicago.
 - `plot_logs.py` is the tracked notebook source; `plot_logs.ipynb` has been
   generated locally. It reloads a chosen/latest CSV on cell execution and plots
   V(t), I(t), action timestamps, and raw I-V samples.
+- `compare_magnet_logs.py` is a separate tracked Jupytext source comparing
+  `20260919_025053_048080Z.csv` as `Magnet` with
+  `20260919_030322_046377Z.csv` as `No magnet`. Its final plot overlays faint
+  raw observations and connected median-current points with IQR error bars.
 - The user requested agent-owned tests and working files under `.agents/`.
   Tests now live in `.agents/test_app.py`; pytest discovery and README commands
   are updated. Root `AGENTS.md` records this rule for future work.

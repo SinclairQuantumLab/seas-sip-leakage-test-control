@@ -29,8 +29,10 @@ Update these records when behavior, decisions, or validation evidence changes.
 - `settings.toml.template`: tracked configuration template. `settings.toml` is
   the default local file and is Git-ignored. Keep the library README GitHub link
   in the connection comments.
-- `plot_logs.py`: user-facing Jupytext source. `plot_logs.ipynb` is the generated
-  local notebook. It only reads CSV snapshots when cells are run.
+- `plot_logs.py`: user-facing Jupytext source for one CSV log.
+  `compare_magnet_logs.py` is the user-facing Jupytext source for the fixed
+  magnet/no-magnet comparison. Their generated `.ipynb` files are local and
+  only read CSV snapshots when cells are run.
 - `README.md`: user installation, settings, execution, and CSV/notebook usage.
 - `.agents/`: agent-created tests, validation helpers, development notes, and
   handoff records. Put new agent working files here unless they are explicitly

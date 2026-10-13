@@ -53,6 +53,10 @@
   The app performs no extra pressure calculation or measurement interpretation.
 - Plotting is a separate user-facing notebook that reloads saved CSV data when
   cells execute. No live plotting service or device access in the notebook.
+- 2026-09-22: Keep the requested magnet/no-magnet comparison in a separate
+  Jupytext notebook. Label `20260919_025053_048080Z` as `Magnet` and
+  `20260919_030322_046377Z` as `No magnet`; compare both with the same median
+  and interquartile-range summary while retaining faint raw observations.
 - 2026-09-18: Agent-created tests, validation scripts, scratch utilities, and
   working records belong in `.agents/` unless explicitly made for user use.
   The CLI, configuration template, and plotting notebook remain user-facing
