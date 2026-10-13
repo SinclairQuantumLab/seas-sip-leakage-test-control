@@ -1,5 +1,22 @@
 # Validation evidence
 
+## Editable import repair, 2026-10-13
+
+- Before repair, `uv run --no-sync python` reported the project's current
+  `.venv/Scripts/python.exe` and installed distribution version 0.1.0, but
+  `importlib.util.find_spec('seas_sip_client')` returned `None`. The generated
+  editable finder pointed into the former OneDrive/ASUS checkout; that module
+  path did not exist.
+- Ran `uv sync --locked --inexact --reinstall-package py-seas-sip-power`:
+  rebuilt and reinstalled only the local editable library, keeping the lockfile
+  and extra installed packages.
+- `uv run --no-sync python -c "import seas_sip_client; print(seas_sip_client.__file__)"`
+  resolved to the current workspace's library source.
+- `uv run --no-sync main.py --help` passed without loading settings or opening
+  a device connection. `uv run --no-sync pytest -q`: 23 passed in 0.29 s.
+- No application/library source or notebook changes, notebook execution, or
+  live device I/O occurred. Ruff was not rerun for this environment-only repair.
+
 ## Initial implementation, 2026-09-18
 
 - 21 offline pytest cases passed using a fake device and monotonic clock.

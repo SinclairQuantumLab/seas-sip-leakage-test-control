@@ -1,6 +1,20 @@
 # Handoff
 
-Updated 2026-09-18, America/Chicago.
+Updated 2026-10-13, America/Chicago.
+
+## Environment repair, 2026-10-13
+
+- Diagnosed `ModuleNotFoundError: No module named 'seas_sip_client'`: the
+  installed editable finder still pointed to the former OneDrive/ASUS checkout,
+  although the library source existed in the current workspace.
+- Reinstalled only the library with
+  `uv sync --locked --inexact --reinstall-package py-seas-sip-power`.
+  Import now resolves to this workspace's `py-seas-sip-power/seas_sip_client.py`.
+- Import, CLI help, and all 23 existing offline tests passed. No device I/O
+  occurred. Application code, configuration, and library source were unchanged.
+- After relocating a checkout, reinstall the editable library if its generated
+  import finder retains an old absolute path; ordinary sync may consider the
+  existing installation current.
 
 ## Current state
 
@@ -59,8 +73,11 @@ Updated 2026-09-18, America/Chicago.
 - The library is its own repository. This work has not modified its files.
 - Keep work and validation small. The user explicitly rejected unnecessary
   packaging and excessive verification. Agent tests stay in `.agents/`.
-- At the time of this handoff, the outer project files are untracked; no commit
-  or push has been requested or performed. Recheck status rather than assuming
-  this remains true.
-- No pending feature request remains from the current implementation. Preserve
-  the user's settings, measurements, and notebook work during future edits.
+- The user requested local commits of the existing work on 2026-10-13, split by
+  editing scope: single-log plots and dependencies, magnet comparison, notebook
+  maintenance policy, and environment repair records. No push was requested.
+  Recheck Git status before continuing.
+- The user is considering removing or making optional the end-of-procedure
+  return to the original voltage. Explain the restoration behavior and propose
+  a change after committing the current work; runtime behavior is unchanged.
+  Preserve the user's settings, measurements, and notebook work during edits.
