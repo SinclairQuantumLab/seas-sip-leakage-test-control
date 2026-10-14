@@ -54,7 +54,14 @@ log = log.rename(
 )
 log["timestamp"] = pd.to_datetime(log["timestamp"], utc=True)
 observations = log.loc[log["event"] == "observation"].copy()
-actions = log.loc[log["event"].isin(["set_voltage", "restore_settings"])].copy()
+actions = log.loc[
+    log["event"].isin(
+        [
+            "set_voltage", "after_test_voltage", "restore_ramp_interval",
+            "restore_settings", "cool_voltage",
+        ]
+    )
+].copy()
 time_origin = log["timestamp"].min()
 observations["elapsed_time_h"] = (
     observations["timestamp"] - time_origin
