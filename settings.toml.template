@@ -22,3 +22,10 @@ initial_voltage_soak_time_s = 300
 # Data-recording duration at every voltage, including the starting voltage.
 hold_time_s = 300
 sample_interval_s = 1
+
+# Optional after-test voltage (disabled when this section is omitted).
+# [after_test]
+# enabled = false
+# voltage_v = "previous" # Initial setpoint, or a fixed voltage such as 1000.
+# Linear setpoint transition in seconds (at least 0.1); not a device ramp time.
+# transition_time_s = 10

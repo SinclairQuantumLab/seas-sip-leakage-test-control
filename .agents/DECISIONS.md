@@ -1,5 +1,26 @@
 # Durable decisions
 
+- 2026-10-13: Use "after-test voltage" terminology without "cool"; the current
+  CSV event is `after_test_voltage`. Plot loading still accepts older
+  `cool_voltage` rows. An omitted section or enabled key defaults to false.
+
+- 2026-10-13: Replace automatic voltage restoration with optional after-test
+  voltage. `[after_test]` defaults to `enabled = false`; the template keeps
+  the entire optional section commented out. `voltage_v` accepts `"previous"`
+  (the initial setpoint) or an integer from 1000 to 6000 V.
+- 2026-10-13: The user selected a linear software setpoint transition over
+  `transition_time_s`, not the device's 0-to-setpoint ramp interval. Update on
+  approximately one-second ticks, skip missed ticks, and request the target
+  no earlier than the deadline. Actual output arrival is not guaranteed.
+  Apply enabled after-test transition on completion, errors, and Ctrl+C after a settings
+  request; always attempt to restore the original ramp interval afterward.
+  Disabled after-test transition never requests the original voltage. This supersedes the
+  earlier two-setting restoration decision.
+- 2026-10-13: Use `after_test_voltage` and `restore_ramp_interval` CSV intent events.
+  Save original settings and intended final settings in `after_test_pending`,
+  and rename to `after_test_confirmed` only after matching requested-settings
+  readback. Confirmation is not a physical voltage or after-test transition assessment.
+
 - 2026-09-18: Do not print individual samples to stdout. Print one concise line
   per voltage-control action with its UTC timestamp, voltage change and target,
   last observed current, and hold time. Read the initial status so the first

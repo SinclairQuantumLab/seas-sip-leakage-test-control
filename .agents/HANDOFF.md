@@ -27,18 +27,31 @@ Updated 2026-10-13, America/Chicago.
   `settings.toml.template`. The template links to the library README for
   connection details. Local settings and timestamped `results/*.csv` are ignored.
 - Before control, the app saves the original voltage setpoint and ramp interval
-  in a `restore_pending` TOML file. The first voltage command also requests the
-  device's minimum supported 1000 ms ramp interval. On cleanup it restores both
-  settings; matching readback renames the file to `restore_confirmed`.
-- Procedure errors are printed before cleanup announces restoration. Normal
-  completion is also announced before the restore request.
+  plus intended after-test settings in an `after_test_pending` TOML file. The
+  first voltage command requests the minimum supported 1000 ms ramp interval.
+  Default cleanup keeps the voltage setpoint and restores only the original
+  ramp interval. Matching requested-settings readback renames the snapshot to
+  `after_test_confirmed`; this does not confirm physical voltage arrival.
+- Optional `[after_test]` defaults to `enabled = false`, `voltage_v = "previous"`,
+  and `transition_time_s = 10`. The voltage can be the initial setpoint or a
+  fixed integer from 1000 to 6000 V. An enabled transition uses a fresh setpoint read
+  and a linear software schedule with approximately one-second updates, missed
+  ticks skipped, and a final target request at or after the deadline. Actual
+  output arrival is not guaranteed. Errors/Ctrl+C also run the enabled transition
+  after a settings request. Ramp restoration is attempted even if it fails.
+- The template includes the optional section as a commented example. The
+  current ignored `settings.toml` has its entire `[after_test]` section
+  commented out by the user. Existing local connection/measurement values were
+  preserved; after-test transition remains disabled.
+- Procedure errors are printed before cleanup is announced. Normal completion
+  is also announced before after-test commands.
 - Each settings command is preceded by a flushed action CSV row. Successful
   samples from recording holds become flushed `observation` rows with all status
   fields. Initial, soak, and restoration reads are not measurement rows.
 - Every device command gets the total attempt count and retry interval configured
   under `[connection]`. Failures are terminal-only. An exhausted scheduled read
   skips one sample while the voltage sequence continues; initial-read and
-  control/restoration failures abort.
+  control/after-test failures abort.
 - CSV headers preserve unit-symbol case, such as `output_voltage_V` and
   `output_current_nA`. The plotting notebook also accepts older lowercase headers.
 - Stdout prints the CSV path and one line per voltage-control action. Sampling
@@ -49,10 +62,13 @@ Updated 2026-10-13, America/Chicago.
   same full recording hold. Both values are required.
 - Successful device commands are separated from the next command by at least
   0.1 seconds. The first set-to-read gap is part of the soak; later recording
-  holds begin after the gap. Restoration retains its one-second readback delay.
+  holds begin after the gap. Ramp restoration retains its one-second readback delay.
 - `plot_logs.py` is the tracked notebook source; `plot_logs.ipynb` has been
   generated locally. It reloads a chosen/latest CSV on cell execution and plots
   V(t), I(t), action timestamps, and raw I-V samples.
+- Plot loading accepts `after_test_voltage` and `restore_ramp_interval` actions as
+  well as historical `restore_settings` and `cool_voltage`. A local `plot_logs.ipynb` was generated
+  without execution; existing per-log notebooks and their outputs were preserved.
 - `compare_magnet_logs.py` is a separate tracked Jupytext source comparing
   `20260919_025053_048080Z.csv` as `Magnet` with
   `20260919_030322_046377Z.csv` as `No magnet`. Its final plot overlays faint
@@ -75,9 +91,10 @@ Updated 2026-10-13, America/Chicago.
   packaging and excessive verification. Agent tests stay in `.agents/`.
 - The user requested local commits of the existing work on 2026-10-13, split by
   editing scope: single-log plots and dependencies, magnet comparison, notebook
-  maintenance policy, and environment repair records. No push was requested.
-  Recheck Git status before continuing.
-- The user is considering removing or making optional the end-of-procedure
-  return to the original voltage. Explain the restoration behavior and propose
-  a change after committing the current work; runtime behavior is unchanged.
-  Preserve the user's settings, measurements, and notebook work during edits.
+  maintenance policy, and environment repair records. Those four commits were
+  created. The user subsequently reported that the after-test changes work and
+  requested committing and pushing the current work, including those commits.
+  Recheck Git status and remote synchronization before continuing.
+- The requested optional after-test voltage is implemented. Offline validation
+  and the user's reported success are recorded in VALIDATION.md. Preserve
+  settings, measurements, and notebook work during edits.

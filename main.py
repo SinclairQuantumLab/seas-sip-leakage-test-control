@@ -81,9 +81,42 @@ class CommandRetrySettings:
             raise ValueError("command_retry_interval_s must be positive and finite")
 
 
+@dataclass(frozen=True)
+class AfterTest:
+    """Optional after-test voltage and the requested transition time in seconds."""
+
+    enabled: bool = False
+    voltage_v: int | str = "previous"
+    transition_time_s: float = 10.0
+
+    def __post_init__(self) -> None:
+        if type(self.enabled) is not bool:
+            raise ValueError("after_test.enabled must be a boolean")
+        if self.voltage_v != "previous" and (
+            type(self.voltage_v) is not int or not 1000 <= self.voltage_v <= 6000
+        ):
+            raise ValueError(
+                'after_test.voltage_v must be "previous" or an integer from 1000 to 6000 V'
+            )
+        if (
+            type(self.transition_time_s) not in (int, float)
+            or not math.isfinite(self.transition_time_s)
+            or self.transition_time_s < 0.1
+        ):
+            raise ValueError(
+                "after_test.transition_time_s must be finite and at least 0.1 s"
+            )
+
+    def target_voltage(self, original_settings: dict[str, int]) -> int:
+        """Resolve previous to the setpoint read before the test started."""
+        if self.voltage_v == "previous":
+            return original_settings["output_voltage_setpoint_v"]
+        return self.voltage_v
+
+
 def load_config(
     path: Path,
-) -> tuple[ConnectionSettings, Measurement, CommandRetrySettings]:
+) -> tuple[ConnectionSettings, Measurement, CommandRetrySettings, AfterTest]:
     """Read connection settings and measurement timing from TOML."""
     with path.open("rb") as stream:
         config = tomllib.load(stream)
@@ -97,6 +130,7 @@ def load_config(
         ConnectionSettings(connection_type=transport, **connection),
         Measurement(**config["measurement"]),
         command_retry,
+        AfterTest(**config.get("after_test", {})),
     )
 
 
@@ -148,14 +182,16 @@ def write_settings_snapshot(
     status: DeviceStatus,
     settings: dict[str, int],
     csv_name: str,
+    after_test: AfterTest,
 ) -> None:
     """Persist original values before either setting is changed."""
     lines = [
         "# Original device settings captured before the measurement procedure.",
-        "# These are the previous values of settings temporarily changed by this app.",
-        "# The app reapplies these values when the procedure ends.",
-        "# A restore_pending filename means readback has not confirmed restoration.",
-        "# A restore_confirmed filename means readback matched these values.",
+        "# The original voltage is retained here for reference and manual recovery.",
+        "# Automatic voltage changes after the test require after_test.enabled.",
+        "# after_test_pending means cleanup has not been confirmed by readback.",
+        "# after_test_confirmed means readback matched after_test_settings only.",
+        "# Confirmation does not mean that the physical voltage ramp has finished.",
         "[snapshot]",
         f'captured_at = "{utc_timestamp(status.observed_at)}"',
         f'csv_file = "{csv_name}"',
@@ -163,11 +199,18 @@ def write_settings_snapshot(
         "[original_settings]",
     ]
     lines.extend(f"{name} = {settings[name]}" for name in CHANGED_SETTING_FIELDS)
+    lines.extend(["", "[after_test_settings]"])
+    expected = {
+        "output_voltage_ramp_interval_ms": settings["output_voltage_ramp_interval_ms"]
+    }
+    if after_test.enabled:
+        expected["output_voltage_setpoint_v"] = after_test.target_voltage(settings)
+    lines.extend(f"{name} = {value}" for name, value in expected.items())
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def settings_match(status: DeviceStatus, settings: dict[str, int]) -> bool:
-    """Return whether readback matches both settings saved for restoration."""
+    """Return whether readback matches the explicitly requested settings."""
     return all(getattr(status, name) == value for name, value in settings.items())
 
 
@@ -200,20 +243,10 @@ class CsvLog:
         self.stream.flush()
         return timestamp
 
-    def set_voltage(
-        self, voltage_v: int, ramp_interval_ms: int | None = None
-    ) -> str:
+    def set_voltage(self, voltage_v: int, ramp_interval_ms: int | None = None) -> str:
         """Record a measurement-step voltage request."""
         return self.settings_action(
             "set_voltage",
-            voltage_v=voltage_v,
-            ramp_interval_ms=ramp_interval_ms,
-        )
-
-    def restore_settings(self, voltage_v: int, ramp_interval_ms: int) -> str:
-        """Record restoration of the two original settings."""
-        return self.settings_action(
-            "restore_settings",
             voltage_v=voltage_v,
             ramp_interval_ms=ramp_interval_ms,
         )
@@ -225,6 +258,7 @@ class CsvLog:
         row["event"] = "observation"
         self.writer.writerow(row)
         self.stream.flush()
+
 
 class DeviceCommandFailed(RuntimeError):
     """Report that a device command exhausted all configured attempts."""
@@ -260,25 +294,119 @@ def run_device_command[CommandResult](
     raise AssertionError("unreachable")
 
 
+def run_after_test(
+    device: SAESSIPPower,
+    log: CsvLog,
+    original_settings: dict[str, int],
+    after_test: AfterTest,
+    command_retry: CommandRetrySettings,
+) -> None:
+    """Optionally transition the setpoint, then restore only the ramp interval."""
+    expected = {
+        "output_voltage_ramp_interval_ms": original_settings[
+            "output_voltage_ramp_interval_ms"
+        ]
+    }
+    try:
+        if after_test.enabled:
+            target = after_test.target_voltage(original_settings)
+            expected["output_voltage_setpoint_v"] = target
+            status = run_device_command(
+                "read_before_after_test_voltage", device.read_sample, command_retry
+            )
+            time.sleep(COMMAND_GAP_S)
+            start_voltage = status.output_voltage_setpoint_v
+            print(
+                f"After-test voltage: {start_voltage} -> {target} V; "
+                f"setpoint transition {after_test.transition_time_s:g} s.",
+                flush=True,
+            )
+            started = time.monotonic()
+            deadline = started + after_test.transition_time_s
+            next_tick = min(started + 1.0, deadline)
+            previous = start_voltage
+            while previous != target:
+                now = time.monotonic()
+                if now < next_tick:
+                    time.sleep(next_tick - now)
+                now = time.monotonic()
+                fraction = (
+                    1.0
+                    if now >= deadline
+                    else (now - started) / after_test.transition_time_s
+                )
+                voltage = (
+                    target
+                    if fraction == 1.0
+                    else round(start_voltage + (target - start_voltage) * fraction)
+                )
+                # Do not round to the final target before the requested duration.
+                if voltage == target and fraction < 1.0:
+                    voltage = target + (1 if start_voltage > target else -1)
+                if voltage != previous:
+                    timestamp = log.settings_action("after_test_voltage", voltage_v=voltage)
+                    run_device_command(
+                        "after_test_voltage",
+                        lambda: device.set_working_parameters(
+                            output_voltage_setpoint_v=voltage
+                        ),
+                        command_retry,
+                    )
+                    time.sleep(COMMAND_GAP_S)
+                    print(
+                        f"{timestamp} after_test_voltage: {previous} -> {voltage} V; "
+                        f"last current {status.output_current_na} nA",
+                        flush=True,
+                    )
+                    previous = voltage
+                now = time.monotonic()
+                next_tick = min(started + math.floor(now - started) + 1.0, deadline)
+        else:
+            print(
+                "After-test voltage disabled; keeping voltage setpoint.",
+                flush=True,
+            )
+    except (Exception, KeyboardInterrupt) as exc:
+        print(f"After-test error: {exc or 'Interrupted'}", file=sys.stderr, flush=True)
+        raise
+    finally:
+        ramp = original_settings["output_voltage_ramp_interval_ms"]
+        timestamp = log.settings_action("restore_ramp_interval", ramp_interval_ms=ramp)
+        print(f"{timestamp} restore_ramp_interval: requesting {ramp} ms", flush=True)
+        run_device_command(
+            "restore_ramp_interval",
+            lambda: device.set_working_parameters(output_voltage_ramp_interval_ms=ramp),
+            command_retry,
+        )
+        time.sleep(1.0)
+    status = run_device_command(
+        "read_after_test_settings", device.read_sample, command_retry
+    )
+    time.sleep(COMMAND_GAP_S)
+    if not settings_match(status, expected):
+        raise RuntimeError("after-test settings did not match the requested values")
+
+
 def run_measurement(
     connection: ConnectionSettings,
     measurement: Measurement,
     output_dir: Path = Path("results"),
     command_retry: CommandRetrySettings = CommandRetrySettings(),
+    *,
+    after_test: AfterTest = AfterTest(),
 ) -> Path:
     """Request each voltage and log samples during each recording hold."""
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{datetime.now(UTC):%Y%m%d_%H%M%S_%fZ}"
     path = output_dir / f"{stem}.csv"
-    pending_settings_path = output_dir / f"{stem}.settings.restore_pending.toml"
-    restored_settings_path = output_dir / f"{stem}.settings.restore_confirmed.toml"
+    pending_settings_path = output_dir / f"{stem}.settings.after_test_pending.toml"
+    confirmed_settings_path = output_dir / f"{stem}.settings.after_test_confirmed.toml"
     device = SAESSIPPower(connection, access_mode=AccessModeEnum.READ_WRITE)
 
     with path.open("x", encoding="utf-8", newline="") as stream:
         log = CsvLog(stream)
         print(f"CSV: {path.resolve()}", flush=True)
         original_settings = None
-        last_requested_voltage = None
         last_status = None
         settings_were_requested = False
         procedure_aborted = False
@@ -310,9 +438,7 @@ def run_measurement(
                 now = time.monotonic()
                 if next_sample < now:
                     missed = (
-                        math.floor(
-                            (now - next_sample) / measurement.sample_interval_s
-                        )
+                        math.floor((now - next_sample) / measurement.sample_interval_s)
                         + 1
                     )
                     next_sample += missed * measurement.sample_interval_s
@@ -326,7 +452,11 @@ def run_measurement(
             time.sleep(COMMAND_GAP_S)
             original_settings = capture_original_settings(last_status)
             write_settings_snapshot(
-                pending_settings_path, last_status, original_settings, path.name
+                pending_settings_path,
+                last_status,
+                original_settings,
+                path.name,
+                after_test,
             )
             print(f"Settings backup: {pending_settings_path.resolve()}", flush=True)
             previous_voltage = last_status.output_voltage_setpoint_v
@@ -337,7 +467,6 @@ def run_measurement(
                     MEASUREMENT_RAMP_INTERVAL_MS if step_index == 0 else None
                 )
                 timestamp = log.set_voltage(voltage, ramp_interval)
-                last_requested_voltage = voltage
                 settings_were_requested = True
                 requested_settings = {"output_voltage_setpoint_v": voltage}
                 if ramp_interval is not None:
@@ -400,47 +529,17 @@ def run_measurement(
                 if original_settings is not None and settings_were_requested:
                     outcome = "aborted" if procedure_aborted else "completed"
                     print(
-                        f"Procedure {outcome}; restoring original settings.",
+                        f"Procedure {outcome}; running after-test cleanup.",
                         file=sys.stderr if procedure_aborted else sys.stdout,
                         flush=True,
                     )
-                    original_voltage = original_settings["output_voltage_setpoint_v"]
-                    original_ramp = original_settings[
-                        "output_voltage_ramp_interval_ms"
-                    ]
-                    timestamp = log.restore_settings(
-                        original_voltage, original_ramp
+                    run_after_test(
+                        device, log, original_settings, after_test, command_retry
                     )
-                    run_device_command(
-                        "restore_settings",
-                        lambda: device.set_working_parameters(**original_settings),
-                        command_retry,
-                    )
-                    time.sleep(1.0)
-                    restored_status = run_device_command(
-                        "read_restored_settings",
-                        device.read_sample,
-                        command_retry,
-                    )
-                    time.sleep(COMMAND_GAP_S)
-                    if not settings_match(restored_status, original_settings):
-                        raise RuntimeError(
-                            "restored settings did not match the saved "
-                            f"settings; use {pending_settings_path} for recovery"
-                        )
-                    pending_settings_path.rename(restored_settings_path)
-                    delta = original_voltage - last_requested_voltage
+                    pending_settings_path.rename(confirmed_settings_path)
                     print(
-                        f"{timestamp} restore_settings: {last_requested_voltage} "
-                        f"-> {original_voltage} V ({delta:+d} V); "
-                        f"ramp interval {MEASUREMENT_RAMP_INTERVAL_MS} -> "
-                        f"{original_ramp} ms; "
-                        f"last current {last_status.output_current_na} nA",
-                        flush=True,
-                    )
-                    print(
-                        f"Settings restore confirmed: "
-                        f"{restored_settings_path.resolve()}",
+                        f"After-test settings confirmed: "
+                        f"{confirmed_settings_path.resolve()}",
                         flush=True,
                     )
             finally:
@@ -473,9 +572,9 @@ def main() -> None:
         )
     settings_path = args.settings_option or args.settings_file or Path("settings.toml")
     try:
-        connection, measurement, command_retry = load_config(settings_path)
+        connection, measurement, command_retry, after_test = load_config(settings_path)
         path = run_measurement(
-            connection, measurement, command_retry=command_retry
+            connection, measurement, command_retry=command_retry, after_test=after_test
         )
     except KeyboardInterrupt as exc:
         message = (
@@ -493,9 +592,7 @@ def main() -> None:
         SAESSIPPowerError,
     ) as exc:
         message = (
-            None
-            if getattr(exc, "_sip_error_reported", False)
-            else f"Error: {exc}\n"
+            None if getattr(exc, "_sip_error_reported", False) else f"Error: {exc}\n"
         )
         parser.exit(1, message)
     print(f"Completed: {path}")

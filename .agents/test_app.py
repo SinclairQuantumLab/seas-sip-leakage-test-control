@@ -63,6 +63,11 @@ class Device:
         self.write_error = None
         self.before_write = lambda: None
         self.before_read = lambda: None
+        self.follow_setpoint = False
+        self.settings = {
+            "output_voltage_setpoint_v": 2900,
+            "output_voltage_ramp_interval_ms": 10000,
+        }
 
     def connect(self):
         self.calls.append(("connect", self.clock.now))
@@ -76,6 +81,7 @@ class Device:
         if self.write_error:
             raise self.write_error
         self.clock.now += self.write_delay
+        self.settings.update(kwargs)
 
     def read_sample(self):
         self.before_read()
@@ -87,7 +93,10 @@ class Device:
         if self.read_error:
             raise self.read_error
         self.clock.now += self.read_delay
-        return sample_at(self.clock.now)
+        sample = sample_at(self.clock.now)
+        if self.follow_setpoint:
+            sample = replace(sample, **self.settings)
+        return sample
 
 
 @pytest.fixture
@@ -112,7 +121,7 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
 
     def check_action_is_already_on_disk():
         rows = read_rows(next(tmp_path.glob("*.csv")))
-        assert rows[-1]["event"] in {"set_voltage", "restore_settings"}
+        assert rows[-1]["event"] in {"set_voltage", "restore_ramp_interval"}
         assert rows[-1]["output_current_nA"] == ""
 
     def check_previous_observations_are_already_on_disk():
@@ -124,9 +133,7 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
     connection = ConnectionSettings("example.invalid")
     path = app.run_measurement(
         connection,
-        app.Measurement(
-            3000, 200, 3200, 2.5, initial_voltage_soak_time_s=2.5
-        ),
+        app.Measurement(3000, 200, 3200, 2.5, initial_voltage_soak_time_s=2.5),
         tmp_path,
     )
     factory.assert_called_once_with(connection, access_mode=AccessModeEnum.READ_WRITE)
@@ -141,7 +148,7 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
         "observation",
         "observation",
         "observation",
-        "restore_settings",
+        "restore_ramp_interval",
     ]
     assert visible_observations == [0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6]
     assert [call[1] for call in device.calls if call[0] == "set"] == pytest.approx(
@@ -154,28 +161,29 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
         },
         {"output_voltage_setpoint_v": 3200},
         {
-            "output_voltage_setpoint_v": 2900,
             "output_voltage_ramp_interval_ms": 10000,
         },
     ]
-    assert [call[1] for call in device.calls if call[0] == "read"] == pytest.approx([
-        0.1,
-        0.3,
-        1.3,
-        2.3,
-        2.7,
-        3.7,
-        4.7,
-        5.3,
-        6.3,
-        7.3,
-        8.8,
-    ])
+    assert [call[1] for call in device.calls if call[0] == "read"] == pytest.approx(
+        [
+            0.1,
+            0.3,
+            1.3,
+            2.3,
+            2.7,
+            3.7,
+            4.7,
+            5.3,
+            6.3,
+            7.3,
+            8.8,
+        ]
+    )
     assert device.calls[-1][0] == "close"
     assert device.calls[-1][1] == pytest.approx(8.9)
     assert clock.now == pytest.approx(8.9)
     assert rows[4]["requested_voltage_V"] == "3200"
-    assert rows[8]["requested_voltage_V"] == "2900"
+    assert rows[8]["requested_voltage_V"] == ""
     assert rows[0]["requested_ramp_interval_ms"] == "1000"
     assert rows[8]["requested_ramp_interval_ms"] == "10000"
     assert rows[1]["requested_voltage_V"] == ""
@@ -188,7 +196,7 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
     assert rows[1]["timestamp"] == "2026-09-18T00:00:02.700000Z"
     assert all(row["timestamp"].endswith("Z") for row in rows)
     assert "observed_at" not in rows[1]
-    restored_files = list(tmp_path.glob("*.settings.restore_confirmed.toml"))
+    restored_files = list(tmp_path.glob("*.settings.after_test_confirmed.toml"))
     assert len(restored_files) == 1
     with restored_files[0].open("rb") as stream:
         saved = tomllib.load(stream)
@@ -196,13 +204,15 @@ def test_fixed_steps_flush_and_observations_stay_distinct(rig, tmp_path, capsys)
         "output_voltage_setpoint_v": 2900,
         "output_voltage_ramp_interval_ms": 10000,
     }
-    assert not list(tmp_path.glob("*.settings.restore_pending.toml"))
+    assert saved["after_test_settings"] == {"output_voltage_ramp_interval_ms": 10000}
+    assert not list(tmp_path.glob("*.settings.after_test_pending.toml"))
     stdout = capsys.readouterr().out
     assert stdout.count(" set_voltage: ") == 2
-    assert stdout.count(" restore_settings: ") == 1
+    assert stdout.count(" restore_ramp_interval: ") == 1
     assert "2900 -> 3000 V (+100 V); ramp interval 10000 -> 1000 ms" in stdout
     assert "3000 -> 3200 V (+200 V); last current 43 nA" in stdout
-    assert "3200 -> 2900 V (-300 V); ramp interval 1000 -> 10000 ms" in stdout
+    assert "keeping voltage setpoint" in stdout
+    assert "requesting 10000 ms" in stdout
 
 
 def test_soak_precedes_a_full_recording_hold(rig, tmp_path):
@@ -210,9 +220,7 @@ def test_soak_precedes_a_full_recording_hold(rig, tmp_path):
     device.write_delay = 2
     path = app.run_measurement(
         ConnectionSettings("example.invalid"),
-        app.Measurement(
-            3000, 200, 3000, 0.5, initial_voltage_soak_time_s=0.5
-        ),
+        app.Measurement(3000, 200, 3000, 0.5, initial_voltage_soak_time_s=0.5),
         tmp_path,
     )
     assert [call[1] for call in device.calls if call[0] == "read"] == pytest.approx(
@@ -222,7 +230,7 @@ def test_soak_precedes_a_full_recording_hold(rig, tmp_path):
     assert [row["event"] for row in read_rows(path)] == [
         "set_voltage",
         "observation",
-        "restore_settings",
+        "restore_ramp_interval",
     ]
 
 
@@ -234,14 +242,16 @@ def test_slow_reads_skip_missed_ticks_without_catchup_bursts(rig, tmp_path):
         app.Measurement(3000, 200, 3000, 3, initial_voltage_soak_time_s=3),
         tmp_path,
     )
-    assert [call[1] for call in device.calls if call[0] == "read"] == pytest.approx([
-        0.1,
-        1.7,
-        3.7,
-        5.2,
-        7.2,
-        9.7,
-    ])
+    assert [call[1] for call in device.calls if call[0] == "read"] == pytest.approx(
+        [
+            0.1,
+            1.7,
+            3.7,
+            5.2,
+            7.2,
+            9.7,
+        ]
+    )
     assert device.calls[-1][0] == "close"
     assert device.calls[-1][1] == pytest.approx(11.2)
 
@@ -254,9 +264,7 @@ def test_scheduled_read_retries_are_terminal_only_and_sequence_continues(
     device.read_failures = [None, None, timeout, timeout, timeout]
     path = app.run_measurement(
         ConnectionSettings("example.invalid"),
-        app.Measurement(
-            3000, 200, 3200, 0.5, initial_voltage_soak_time_s=0.5
-        ),
+        app.Measurement(3000, 200, 3200, 0.5, initial_voltage_soak_time_s=0.5),
         tmp_path,
         app.CommandRetrySettings(count=3, interval_s=0.2),
     )
@@ -265,7 +273,7 @@ def test_scheduled_read_retries_are_terminal_only_and_sequence_continues(
         "set_voltage",
         "set_voltage",
         "observation",
-        "restore_settings",
+        "restore_ramp_interval",
     ]
     assert rows[1]["requested_voltage_V"] == "3200"
     assert "error" not in rows[0]
@@ -279,7 +287,7 @@ def test_scheduled_read_retries_are_terminal_only_and_sequence_continues(
     "failure", [SAESSIPPowerCommunicationError("timeout"), KeyboardInterrupt()]
 )
 @pytest.mark.parametrize("operation", ["read", "write"])
-def test_failure_restores_after_a_voltage_request_and_closes(
+def test_failure_restores_only_ramp_after_a_voltage_request_and_closes(
     rig, tmp_path, operation, failure
 ):
     _, device, _ = rig
@@ -303,14 +311,14 @@ def test_failure_restores_after_a_voltage_request_and_closes(
     else:
         assert [row["event"] for row in rows] == [
             "set_voltage",
-            "restore_settings",
+            "restore_ramp_interval",
         ]
         assert rows[0]["requested_voltage_V"] == "3000"
         assert rows[0]["requested_ramp_interval_ms"] == "1000"
-        assert rows[1]["requested_voltage_V"] == "2900"
+        assert rows[1]["requested_voltage_V"] == ""
         assert rows[1]["requested_ramp_interval_ms"] == "10000"
         assert [call[0] for call in device.calls].count("set") == 2
-        assert list(tmp_path.glob("*.settings.restore_pending.toml"))
+        assert list(tmp_path.glob("*.settings.after_test_pending.toml"))
     assert device.calls[-1][0] == "close"
 
 
@@ -375,8 +383,173 @@ def test_config_maps_transport_once(tmp_path, transport):
         "hold_time_s = 300\n",
         encoding="utf-8",
     )
-    connection, measurement, command_retry = app.load_config(path)
+    connection, measurement, command_retry, after_test = app.load_config(path)
     assert connection.connection_type is ConnectionTypeEnum(transport)
     assert measurement.initial_voltage_soak_time_s == 600
     assert measurement.sample_interval_s == 1
     assert command_retry == app.CommandRetrySettings(count=5, interval_s=0.25)
+    assert after_test == app.AfterTest()
+
+
+@pytest.mark.parametrize("voltage", ["previous", 1000, 4000])
+def test_after_test_voltage_transitions_from_fresh_setpoint_and_confirms(
+    rig, tmp_path, voltage
+):
+    clock, device, _ = rig
+    device.follow_setpoint = True
+    device.before_write = lambda: assert_action_flushed(tmp_path)
+    path = app.run_measurement(
+        ConnectionSettings("example.invalid"),
+        app.Measurement(3200, 200, 3200, 0.5, 0.5),
+        tmp_path,
+        after_test=app.AfterTest(True, voltage, 2.5),
+    )
+    rows = read_rows(path)
+    transition_rows = [row for row in rows if row["event"] == "after_test_voltage"]
+    target = 2900 if voltage == "previous" else voltage
+    assert [int(row["requested_voltage_V"]) for row in transition_rows] == [
+        round(3200 + (target - 3200) * 0.4),
+        round(3200 + (target - 3200) * 0.8),
+        target,
+    ]
+    transition_calls = [call for call in device.calls if call[0] == "set"][1:-1]
+    before_transition = [call[1] for call in device.calls if call[0] == "read"][-2]
+    assert transition_calls[-1][1] - (before_transition + app.COMMAND_GAP_S) == pytest.approx(2.5)
+    assert device.settings == {
+        "output_voltage_setpoint_v": target,
+        "output_voltage_ramp_interval_ms": 10000,
+    }
+    assert all(row["output_voltage_V"] == "" for row in transition_rows)
+    assert all(row["requested_ramp_interval_ms"] == "" for row in transition_rows)
+    assert rows[-1]["event"] == "restore_ramp_interval"
+    assert rows[-1]["requested_voltage_V"] == ""
+    assert device.calls[-1][0] == "close"
+    assert clock.now > transition_calls[-1][1]
+    with next(tmp_path.glob("*.after_test_confirmed.toml")).open("rb") as stream:
+        assert tomllib.load(stream)["after_test_settings"] == device.settings
+
+
+def assert_action_flushed(directory):
+    rows = read_rows(next(directory.glob("*.csv")))
+    assert rows[-1]["event"] in {"set_voltage", "after_test_voltage", "restore_ramp_interval"}
+    assert rows[-1]["output_voltage_V"] == ""
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("transition failed"), KeyboardInterrupt()])
+def test_transition_failure_restores_ramp_and_leaves_pending_snapshot(
+    rig, tmp_path, failure
+):
+    _, device, _ = rig
+    device.follow_setpoint = True
+
+    def fail_transition():
+        if read_rows(next(tmp_path.glob("*.csv")))[-1]["event"] == "after_test_voltage":
+            raise failure
+
+    device.before_write = fail_transition
+    expected = (
+        KeyboardInterrupt
+        if isinstance(failure, KeyboardInterrupt)
+        else app.DeviceCommandFailed
+    )
+    with pytest.raises(expected):
+        app.run_measurement(
+            ConnectionSettings("example.invalid"),
+            app.Measurement(3200, 200, 3200, 0.5, 0.5),
+            tmp_path,
+            app.CommandRetrySettings(count=1),
+            after_test=app.AfterTest(True, 1000, 2),
+        )
+    assert device.calls[-2][2] == {"output_voltage_ramp_interval_ms": 10000}
+    assert device.calls[-1][0] == "close"
+    assert list(tmp_path.glob("*.after_test_pending.toml"))
+    assert not list(tmp_path.glob("*.after_test_confirmed.toml"))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"enabled": "false"},
+        {"voltage_v": "fixed"},
+        {"voltage_v": True},
+        {"voltage_v": 999},
+        {"voltage_v": 6001},
+        {"transition_time_s": 0},
+        {"transition_time_s": float("inf")},
+        {"transition_time_s": True},
+    ],
+)
+def test_invalid_after_test_settings_fail_before_io(changes):
+    with pytest.raises(ValueError):
+        replace(app.AfterTest(), **changes)
+
+
+def test_config_loads_optional_after_test_section(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text(
+        '[connection]\naddress = "example.invalid"\n'
+        "[measurement]\nstart_voltage_v = 3000\nstep_voltage_v = 200\n"
+        "stop_voltage_v = 5000\ninitial_voltage_soak_time_s = 10\nhold_time_s = 10\n"
+        "[after_test]\nenabled = true\nvoltage_v = 1000\ntransition_time_s = 120\n",
+        encoding="utf-8",
+    )
+    assert app.load_config(path)[3] == app.AfterTest(True, 1000, 120)
+
+
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("procedure failed"), KeyboardInterrupt()]
+)
+def test_procedure_abort_still_runs_enabled_transition(rig, tmp_path, failure, capsys):
+    _, device, _ = rig
+    device.follow_setpoint = True
+    failures = [failure]
+
+    def fail_first_write():
+        if failures:
+            raise failures.pop()
+
+    device.before_write = fail_first_write
+    expected = (
+        KeyboardInterrupt
+        if isinstance(failure, KeyboardInterrupt)
+        else app.DeviceCommandFailed
+    )
+    with pytest.raises(expected):
+        app.run_measurement(
+            ConnectionSettings("example.invalid"),
+            app.Measurement(3200, 200, 3200, 0.5, 0.5),
+            tmp_path,
+            app.CommandRetrySettings(count=1),
+            after_test=app.AfterTest(True, 1000, 0.5),
+        )
+    assert device.settings["output_voltage_setpoint_v"] == 1000
+    assert list(tmp_path.glob("*.after_test_confirmed.toml"))
+    stderr = capsys.readouterr().err
+    assert stderr.index(
+        "Interrupted." if isinstance(failure, KeyboardInterrupt) else "Error:"
+    ) < stderr.index("Procedure aborted;")
+
+
+@pytest.mark.parametrize("duration, delay", [(0.1, 0), (0.5, 0), (3, 1.4)])
+def test_transition_schedule_skips_missed_ticks_and_never_finishes_early(
+    rig, tmp_path, duration, delay
+):
+    _, device, _ = rig
+    device.follow_setpoint = True
+    device.write_delay = delay
+    app.run_measurement(
+        ConnectionSettings("example.invalid"),
+        app.Measurement(3200, 200, 3200, 0.5, 0.5),
+        tmp_path,
+        after_test=app.AfterTest(True, 1000, duration),
+    )
+    cool = [call for call in device.calls if call[0] == "set"][1:-1]
+    started = [call[1] for call in device.calls if call[0] == "read"][
+        -2
+    ] + app.COMMAND_GAP_S
+    assert cool[-1][1] >= started + duration - 1e-9
+    assert cool[-1][2]["output_voltage_setpoint_v"] == 1000
+    for previous, following in zip(cool, cool[1:]):
+        assert following[1] - previous[1] >= delay + app.COMMAND_GAP_S - 1e-9
+    if delay:
+        assert len(cool) == 2

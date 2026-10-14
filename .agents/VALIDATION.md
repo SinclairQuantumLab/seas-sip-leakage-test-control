@@ -1,5 +1,54 @@
 # Validation evidence
 
+## User feedback and publication request, 2026-10-13
+
+- The user reported that the changes work and requested commit and push.
+  No device-operation details or measurement evidence were supplied with that
+  report; the agent has performed only the offline checks recorded below.
+- No further runtime changes were made for publication, so the passing checks
+  below were not repeated. Local settings, CSVs, and notebooks remain ignored.
+
+## After-test voltage terminology, 2026-10-13
+
+- Renamed configuration comments, CLI messages, documentation, and the CSV
+  intent event to after-test voltage (`after_test_voltage`). Plot loading still
+  accepts older `cool_voltage` rows. Transition behavior is unchanged.
+- Preserved the user's fully commented after-test section in `settings.toml`.
+  Offline loading confirms `enabled = false`. Omitting only the enabled field
+  also selects false. Documented that commenting only the TOML section header
+  while leaving its keys active assigns them to the preceding section.
+- `uv run --no-sync pytest -q -k 'after_test or transition'`: 19 passed,
+  23 deselected in 0.34 s. No new tests or hardware operations were added.
+- Inspected and backed up the existing local plotting notebook, then updated
+  it with Jupytext without execution. No render or cell-equivalence checks.
+
+## Optional after-test cool voltage, 2026-10-13
+
+- Replaced automatic voltage restoration with default-disabled `[after_test]`
+  cooling. The user selected a linear software setpoint transition rather than
+  using the device's 0-to-setpoint ramp interval as the transition duration.
+- Existing offline cases now verify ramp-only cleanup and blank requested
+  voltage on `restore_ramp_interval`. Added coverage for previous/fixed cool
+  targets, upward/downward transitions, CSV flush before every cooling write,
+  deadline timing, short transitions, missed ticks, option validation,
+  configuration loading, procedure errors/Ctrl+C, and cooling failures.
+- `uv sync --locked --inexact --group notebook` completed without changing
+  the lockfile. `uv run --no-sync pytest -q`: 42 passed in 0.48 s.
+  `uv run --no-sync ruff check main.py .agents plot_logs.py`: passed.
+- Inspected the three existing local notebooks' input selections and saved
+  output counts before generating `plot_logs.ipynb` with
+  `uv run --group notebook jupytext --to ipynb --update plot_logs.py`. Existing
+  comparison and per-log notebooks were untouched. No notebook execution,
+  render checks, or cell-equivalence checks were performed.
+- Added the fully commented optional section to the tracked template and an
+  active default-disabled section to the current ignored settings file,
+  preserving its existing connection and measurement configuration.
+- Loaded both settings files offline: each resolves to disabled cooling with
+  previous voltage and a 10-second transition. The current measurement inputs
+  remain 1000/200/5000 V, 10-second soak/hold, and 1-second sampling.
+- Library source, measurement data, and HV state were not changed. All tests
+  used fakes; no live device I/O or hardware qualification occurred.
+
 ## Editable import repair, 2026-10-13
 
 - Before repair, `uv run --no-sync python` reported the project's current

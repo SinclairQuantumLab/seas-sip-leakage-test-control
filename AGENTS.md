@@ -65,18 +65,24 @@ Update these records when behavior, decisions, or validation evidence changes.
 - The app changes the voltage setpoint and temporarily requests the device's
   minimum supported ramp interval of 1000 ms. Starting/stopping HV belongs to
   the user. Read the initial status once and save only the original setpoint and
-  ramp interval in a `restore_pending` TOML file. Restore both once after a
-  settings request, including on errors and Ctrl+C; rename the file to
-  `restore_confirmed` only after matching readback. Do not wait for the physical
-  voltage ramp to finish. Closing never sends Start, Stop, Reset, or Clear Alarm.
+  ramp interval in an `after_test_pending` TOML file, alongside the intended
+  after-test settings. After-test voltage is disabled by default; only the original
+  ramp interval is restored. Optional `[after_test]` settings select the previous
+  or a fixed voltage and a linear software setpoint transition time. After-test transition
+  applies after completion, errors, or Ctrl+C following a settings request.
+  Restore the ramp interval even if after-test transition fails; rename the file to
+  `after_test_confirmed` only after matching requested-settings readback.
+  Do not wait for the physical voltage ramp to finish. Closing never sends
+  Start, Stop, Reset, or Clear Alarm.
 - Print a procedure error before cleanup starts. Then announce whether the
-  procedure aborted or completed before requesting restoration, so terminal
+  procedure aborted or completed before requesting after-test cleanup, so terminal
   output reflects the actual event order.
 - Keep one timestamp-named CSV per invocation. `set_voltage` and
-  `restore_settings` rows are written and flushed before their calls and record
+  `after_test_voltage` and `restore_ramp_interval` rows are written and flushed before
+  their calls and record
   intent, not successful application.
   `observation` rows contain successful recording-hold samples only. Initial,
-  soak, and restoration readbacks are not measurement observations. Keep
+  soak, and after-test readbacks are not measurement observations. Keep
   requested voltage, observed setpoint, and actual output voltage distinct.
 - Preserve all returned status fields; rename `observed_at` to UTC `timestamp`.
   CSV headers use proper unit-symbol case (`V`, `nA`, `K`, `W`, `A`, `Torr`);
@@ -84,7 +90,7 @@ Update these records when behavior, decisions, or validation evidence changes.
   Unknown observations stay blank. Give each device command the configured total
   number of attempts and print failures only to the terminal. After all attempts,
   skip a failed scheduled sample and continue the voltage sequence; initial-read,
-  settings-write, and restoration failures abort. Flush the header and every row.
+  settings-write, and after-test failures abort. Flush the header and every row.
 - The notebook snapshots the CSV, excludes any incomplete trailing line, and
   plots observations and action timestamps. It never accesses the device.
 - Use offline fakes for development. A request to implement or test software

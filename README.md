@@ -84,22 +84,60 @@ sample_interval_s = 1
 - The app changes the voltage setpoint. The user starts and stops HV operation.
   Before the first step, it reads the current device status and saves the
   original voltage setpoint and ramp interval in a sibling
-  `*.settings.restore_pending.toml` file. On completion, Ctrl+C, or an error
-  after a settings request, it reapplies those two values once and records a
-  `restore_settings` action. A successful readback renames the backup to
-  `*.settings.restore_confirmed.toml`; a pending file remains available for
-  recovery if restoration is not confirmed. Confirmation concerns the two
-  settings, not completion of the physical voltage ramp.
-  The backup stores the values under `[original_settings]` and explains the
-  pending and confirmed filename states in its header comments.
+  `*.settings.after_test_pending.toml` file. After a settings request, cleanup
+  runs on completion, Ctrl+C, or an error. By default, it keeps the voltage
+  setpoint and restores only the original ramp interval. Optional after-test voltage
+  behavior is described below. Matching readback renames the backup to
+  `*.settings.after_test_confirmed.toml`. A pending file remains available for
+  manual recovery when cleanup fails. The backup contains `[original_settings]`
+  and `[after_test_settings]`; confirmation concerns only the latter settings,
+  not completion of the physical voltage ramp.
 - `command_retry_count` is the total number of attempts allowed for each device
   command; `command_retry_interval_s` is the delay after a failed attempt. These
   communication settings belong under `[connection]`. Failures are printed to
   the terminal and are not written to CSV. If every attempt for a scheduled
   read fails, that sample is skipped and the voltage sequence continues. An
-  initial read, settings write, restoration, or file failure still aborts the
+  initial read, settings write, after-test cleanup, or file failure still aborts the
   procedure. For an abort after a settings change, the terminal shows the error
-  first and then announces restoration. Rows already flushed remain in the file.
+  first and then announces cleanup. Rows already flushed remain in the file.
+
+## Optional after-test voltage
+
+After-test voltage is disabled by default. The template includes a fully commented
+section; existing settings files need no changes. To enable it, add:
+
+```toml
+[after_test]
+enabled = true
+voltage_v = "previous"
+transition_time_s = 120
+```
+
+Omitting the entire section, commenting out the entire section, or omitting
+only `enabled` all select the default `false`. Keep the section header when
+leaving its keys uncommented; otherwise TOML assigns them to the previous table.
+
+- `voltage_v = "previous"` selects the setpoint read before the test. To choose
+  a fixed value, use an integer from 1000 to 6000, such as `voltage_v = 1000`.
+  This does not issue an HV Stop command, and zero is not a supported setpoint.
+- `transition_time_s` defaults to 10 seconds and must be finite and at least
+  0.1 seconds. It defines a linear setpoint transition starting from a fresh
+  device read after the procedure. Commands are sent approximately once per
+  second, with a final target request at the deadline or later if communication
+  is slow. Missed ticks are skipped. If the current setpoint already matches the
+  target, no voltage command or transition wait is needed.
+- This duration is a software setpoint schedule, not the device's ramp interval
+  or a guarantee of the actual output voltage's arrival time. The CLI does not
+  wait for physical settling. The temporary 1000 ms ramp interval remains in
+  use during the transition, then the original ramp interval is restored.
+- When enabled, the transition runs after normal completion, errors, and Ctrl+C
+  following a settings request. Transition failure still triggers an attempt to
+  restore the original ramp interval and close the connection. A second Ctrl+C
+  can interrupt the transition.
+- After-test readbacks are not measurement observations. Every transition
+  setpoint request is flushed to CSV as `after_test_voltage` before its device
+  call. With `enabled = false`, no transition read or voltage request occurs;
+  only the ramp interval is restored and checked.
 
 Choose `udp`, `modbus_tcp`, or `modbus_rtu` for the transport. Optional connection
 fields are `port`, `timeout_s`, `modbus_id`, and `baudrate`; defaults come from the
@@ -117,17 +155,18 @@ timestamp,event,requested_voltage_V,requested_ramp_interval_ms,output_voltage_se
 2026-09-18T19:30:00.000000Z,set_voltage,3000,1000,,,
 2026-09-18T19:35:00.000000Z,observation,,,3000,2998,43
 2026-09-18T19:40:00.000000Z,set_voltage,3200,,,,
-2026-09-18T19:45:00.000000Z,restore_settings,2900,10000,,,
+2026-09-18T19:45:00.000000Z,restore_ramp_interval,,10000,,,
 ```
 
 - `set_voltage`: records and flushes the requested voltage immediately before
   the command call. Its first row also records the 1000 ms ramp interval.
   Measurement columns are blank. This records intent, not successful
   transmission or confirmed device application.
-- `restore_settings`: records the one-time request that restores the original
-  voltage setpoint and ramp interval.
+- `after_test_voltage`: records each optional after-test setpoint request.
+- `restore_ramp_interval`: records the request to restore only the original
+  ramp interval. The requested-voltage column stays blank.
 - `observation`: contains a successful `read_sample()` result from a configured
-  recording hold. Initial status, starting-voltage soak, and restoration
+  recording hold. Initial status, starting-voltage soak, and after-test
   readback values are not measurement rows. The requested-voltage column is
   blank. Both the setpoint and actual output voltage are read from the device.
 - Timestamps use ISO 8601 UTC. Actions use the host time immediately before the
@@ -155,6 +194,8 @@ data saved so far. Loading takes one file snapshot and excludes any incomplete
 trailing line that is still being written.
 
 The V(t) and I(t) plots mark voltage-change requests with vertical lines.
+A ramp-interval restoration is also marked. Older `restore_settings` rows are
+still accepted alongside the current action events.
 A separate I-V scatter plot shows all observations, including transients.
 The notebook reads CSV files only and never connects to the device.
 
